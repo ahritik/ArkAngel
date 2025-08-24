@@ -1,3 +1,5 @@
+<img width="1024" height="1024" alt="ArkAngellogo" src="https://github.com/user-attachments/assets/dd750220-7f3d-43c1-9c64-2a49849fa8ed" />
+
 # ArkAngel 🚀
 
 A lightning-fast, privacy-first AI assistant that works seamlessly during meetings, interviews, and conversations without anyone knowing.
