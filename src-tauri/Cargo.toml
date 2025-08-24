@@ -1,12 +1,12 @@
 [package]
-name = "pluely"
+name = "arkangel"
 version = "0.1.1"
-description = "The Open Source Alternative to Cluely - A lightning-fast, privacy-first AI assistant that works seamlessly during meetings, interviews, and conversations without anyone knowing."
-authors = ["Srikanth Nani <srikanthnani1202@gmail.com>"]
+description = "ArkAngel - A lightning-fast, privacy-first AI assistant that works seamlessly during meetings, interviews, and conversations without anyone knowing."
+authors = ["NadavShanun-design <nadavshanun@gmail.com>"]
 license = "MIT"
-repository = "https://github.com/iamsrikanthnani/pluely"
-homepage = "https://github.com/iamsrikanthnani/pluely"
-documentation = "https://github.com/iamsrikanthnani/pluely/wiki"
+repository = "https://github.com/NadavShanun-design/ArkAngel"
+homepage = "https://github.com/NadavShanun-design/ArkAngel"
+documentation = "https://github.com/NadavShanun-design/ArkAngel/wiki"
 readme = "../README.md"
 keywords = ["ai-assistant", "tauri", "desktop-app", "privacy-first", "meeting-assistant"]
 categories = ["gui", "multimedia", "accessibility", "science", "development-tools"]
@@ -18,7 +18,7 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "pluely_lib"
+name = "arkangel_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -31,6 +31,12 @@ tauri-plugin-updater = "2"  # Move this here
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1.10"
+# AWS upload dependencies
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+anyhow = "1"
+toml = "0.8"
+time = "0.3"
+walkdir = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-macos-permissions = "2"

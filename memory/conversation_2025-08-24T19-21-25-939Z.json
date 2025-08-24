@@ -1,0 +1,20 @@
+{
+  "createdAt": 1756063285938,
+  "id": "conv_1756063285938_1a9bkj0w6",
+  "messages": [
+    {
+      "content": "whats 1 plus 1",
+      "id": "msg_1756063285938_user",
+      "role": "user",
+      "timestamp": 1756063285938
+    },
+    {
+      "content": "2",
+      "id": "msg_1756063285938_assistant",
+      "role": "assistant",
+      "timestamp": 1756063285939
+    }
+  ],
+  "title": "whats 1 plus 1",
+  "updatedAt": 1756063285938
+}

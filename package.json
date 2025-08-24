@@ -1,21 +1,21 @@
 {
-  "name": "pluely",
+  "name": "arkangel",
   "private": false,
   "version": "0.1.1",
-  "description": "The Open Source Alternative to Cluely - A lightning-fast, privacy-first AI assistant that works seamlessly during meetings, interviews, and conversations without anyone knowing.",
+  "description": "ArkAngel - A lightning-fast, privacy-first AI assistant that works seamlessly during meetings, interviews, and conversations without anyone knowing.",
   "author": {
-    "name": "Srikanth Nani",
-    "email": "srikanthnani1202@gmail.com",
-    "url": "https://www.srikanthnani.com"
+    "name": "NadavShanun-design",
+    "email": "",
+    "url": "https://github.com/NadavShanun-design"
   },
   "license": "MIT",
-  "homepage": "https://github.com/iamsrikanthnani/pluely#readme",
+  "homepage": "https://github.com/NadavShanun-design/ArkAngel#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/iamsrikanthnani/pluely.git"
+    "url": "git+https://github.com/NadavShanun-design/ArkAngel.git"
   },
   "bugs": {
-    "url": "https://github.com/iamsrikanthnani/pluely/issues"
+    "url": "https://github.com/NadavShanun-design/ArkAngel/issues"
   },
   "keywords": [
     "ai-assistant",
@@ -28,7 +28,7 @@
     "llm",
     "chatgpt",
     "claude",
-    "cluely-alternative",
+    "arkangel",
     "typescript",
     "react",
     "rust"

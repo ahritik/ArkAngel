@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod window;
 mod pii_scrubber;
+mod aws_uploader;
 
 
 
@@ -63,20 +64,42 @@ fn write_conversation_to_file(conversation_data: String, filename: String) -> Re
   Ok(())
 }
 
+#[tauri::command]
+fn trigger_aws_upload() -> Result<String, String> {
+  // Create a new uploader instance and trigger a manual scan
+  let uploader = aws_uploader::AwsUploader::new()
+    .map_err(|e| format!("Failed to create AWS uploader: {}", e))?;
+  
+  match uploader.scan_and_upload() {
+    Ok(_) => Ok("AWS upload scan completed successfully".to_string()),
+    Err(e) => Err(format!("AWS upload scan failed: {}", e))
+  }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mut builder = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             greet, 
             get_app_version,
             set_window_height,
-            write_conversation_to_file
+            write_conversation_to_file,
+            trigger_aws_upload
         ])
         .setup(|app| {
             // Setup main window positioning
             window::setup_main_window(app).expect("Failed to setup main window");
+            
+            // Start AWS background uploader (non-blocking)
+            if let Err(e) = aws_uploader::AwsUploader::start_background_uploader() {
+                eprintln!("Failed to start AWS uploader: {}", e);
+                // Don't fail the app startup if AWS uploader fails
+            } else {
+                println!("AWS background uploader started successfully");
+            }
+            
             Ok(())
         });
 

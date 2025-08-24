@@ -1,0 +1,32 @@
+{
+  "createdAt": 1756063285938,
+  "id": "conv_1756063285938_1a9bkj0w6",
+  "messages": [
+    {
+      "content": "2",
+      "id": "msg_1756063285938_assistant",
+      "role": "assistant",
+      "timestamp": 1756063285939
+    },
+    {
+      "content": "whats 1 plus 1",
+      "id": "msg_1756063285938_user",
+      "role": "user",
+      "timestamp": 1756063285938
+    },
+    {
+      "content": "my name is BLOCKED",
+      "id": "msg_1756063295953_user",
+      "role": "user",
+      "timestamp": 1756063295953
+    },
+    {
+      "content": "nice to meet you, BLOCKED! How can I help you today?",
+      "id": "msg_1756063295953_assistant",
+      "role": "assistant",
+      "timestamp": 1756063295954
+    }
+  ],
+  "title": "whats 1 plus 1",
+  "updatedAt": 1756063295953
+}
