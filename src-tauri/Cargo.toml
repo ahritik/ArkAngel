@@ -1,0 +1,36 @@
+[package]
+name = "pluely"
+version = "0.1.1"
+description = "The Open Source Alternative to Cluely - A lightning-fast, privacy-first AI assistant that works seamlessly during meetings, interviews, and conversations without anyone knowing."
+authors = ["Srikanth Nani <srikanthnani1202@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/iamsrikanthnani/pluely"
+homepage = "https://github.com/iamsrikanthnani/pluely"
+documentation = "https://github.com/iamsrikanthnani/pluely/wiki"
+readme = "../README.md"
+keywords = ["ai-assistant", "tauri", "desktop-app", "privacy-first", "meeting-assistant"]
+categories = ["gui", "multimedia", "accessibility", "science", "development-tools"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "pluely_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-opener = "2"
+tauri-plugin-updater = "2"  # Move this here
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1.10"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri-plugin-macos-permissions = "2"

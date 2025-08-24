@@ -1,0 +1,68 @@
+{
+  "createdAt": 1756014528654,
+  "id": "conv_1756014528654_c3lytbw5a",
+  "messages": [
+    {
+      "content": "Microsoft is an American multinational technology company founded in 1975 by Bill Gates and Paul Allen, headquartered in Redmond, Washington. It develops software, hardware, and cloud services—best known for Windows, Microsoft 365 (Office), Azure, and Teams. It also owns LinkedIn and GitHub, makes Xbox and Surface devices, and offers AI tools like Microsoft Copilot and Azure AI services. As of 2024, the CEO is Satya Nadella.",
+      "id": "msg_1756014661562_assistant",
+      "role": "assistant",
+      "timestamp": 1756014661563
+    },
+    {
+      "content": "What is Microsoft?",
+      "id": "msg_1756014661562_user",
+      "role": "user",
+      "timestamp": 1756014661562
+    },
+    {
+      "content": "1984 by George Orwell.",
+      "id": "msg_1756014646651_assistant",
+      "role": "assistant",
+      "timestamp": 1756014646652
+    },
+    {
+      "content": "Give me a name of a book.",
+      "id": "msg_1756014646651_user",
+      "role": "user",
+      "timestamp": 1756014646651
+    },
+    {
+      "content": "The Night Circus by Erin Morgenstern.",
+      "id": "msg_1756014552092_assistant",
+      "role": "assistant",
+      "timestamp": 1756014552093
+    },
+    {
+      "content": "My phone number is BLOCKED.",
+      "id": "msg_1756014552092_user",
+      "role": "user",
+      "timestamp": 1756014552092
+    },
+    {
+      "content": "To Kill a Mockingbird.",
+      "id": "msg_1756014528654_assistant",
+      "role": "assistant",
+      "timestamp": 1756014528655
+    },
+    {
+      "content": "Oh, give me a name of a book.",
+      "id": "msg_1756014528654_user",
+      "role": "user",
+      "timestamp": 1756014528654
+    },
+    {
+      "content": "my name is BLOCKED.",
+      "id": "msg_1756014673107_user",
+      "role": "user",
+      "timestamp": 1756014673107
+    },
+    {
+      "content": "Hi Nadav—try Project Hail Mary by Andy Weir. Want more picks by a specific genre?",
+      "id": "msg_1756014673107_assistant",
+      "role": "assistant",
+      "timestamp": 1756014673108
+    }
+  ],
+  "title": "Oh, give me a name of a book.",
+  "updatedAt": 1756014673107
+}
