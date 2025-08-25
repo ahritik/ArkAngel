@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::{fs, io::Read, path::{Path, PathBuf}, thread, time::Duration};
+use std::{fs, io::Read, path::{Path, PathBuf}, thread, time::Duration, sync::mpsc::channel, collections::HashSet, sync::Mutex};
 use walkdir::WalkDir;
+use notify::{RecommendedWatcher, RecursiveMode, Watcher, event::EventKind};
 
 // -------- config --------
 
@@ -17,8 +18,53 @@ pub struct AwsConfig {
 
 impl AwsConfig {
     pub fn load() -> Result<Self> {
-        let text = fs::read_to_string("config.toml").context("reading config.toml")?;
+        // Try to find config.toml in multiple locations
+        let config_paths = vec![
+            "config.toml",  // Current directory
+            "../config.toml",  // Parent directory (for when running from src-tauri)
+            "../../config.toml",  // Two levels up (fallback)
+        ];
+        
+        let mut config_content = None;
+        let mut found_path = None;
+        
+        for path in &config_paths {
+            if let Ok(content) = fs::read_to_string(path) {
+                config_content = Some(content);
+                found_path = Some(*path);
+                println!("🔍 AWS Config: Found config at {}", path);
+                break;
+            }
+        }
+        
+        let text = config_content.ok_or_else(|| anyhow!("config.toml not found in any expected location"))?;
         let mut cfg: AwsConfig = toml::from_str(&text).context("parsing config.toml")?;
+        
+        // Resolve relative paths to absolute paths
+        if !cfg.watch_dir.starts_with("C:") && !cfg.watch_dir.starts_with("/") {
+            // Always resolve watch_dir relative to project root (one level up from where config.toml was found)
+            let project_root = match found_path {
+                Some("config.toml") => std::env::current_dir()?.join(".."),
+                Some("../config.toml") => std::env::current_dir()?.join("..").join(".."),
+                Some("../../config.toml") => std::env::current_dir()?.join("..").join("..").join(".."),
+                _ => std::env::current_dir()?.join(".."),
+            };
+            
+            // Resolve the watch_dir relative to the project root
+            let resolved_path = project_root.join(&cfg.watch_dir);
+            
+            // Canonicalize the path if possible, otherwise use the joined path
+            let final_path = if let Ok(canonical) = resolved_path.canonicalize() {
+                canonical
+            } else {
+                resolved_path
+            };
+            
+            cfg.watch_dir = final_path.to_string_lossy().to_string();
+            println!("🔍 AWS Config: Project root: {}", project_root.display());
+            println!("🔍 AWS Config: Resolved watch_dir to: {}", cfg.watch_dir);
+        }
+        
         if cfg.scan_interval_secs.is_none() { cfg.scan_interval_secs = Some(60); }
         if cfg.concurrency.is_none() { cfg.concurrency = Some(2); }
         Ok(cfg)
@@ -193,24 +239,34 @@ impl AwsUploader {
     }
 
     pub fn scan_and_upload(&self) -> Result<()> {
+        println!("🔍 AWS Uploader: Starting scan of directory: {}", self.config.watch_dir);
+        
         // gather candidate files
         let mut files: Vec<PathBuf> = Vec::new();
         for entry in WalkDir::new(&self.config.watch_dir).max_depth(1) {
             let entry = match entry { Ok(e) => e, Err(_) => continue };
             let p = entry.path().to_path_buf();
             if p.is_file() && is_complete_json(&p) {
+                println!("🔍 AWS Uploader: Found file: {}", p.display());
                 files.push(p);
             }
         }
 
         if !files.is_empty() {
-            println!("found {} file(s) to upload", files.len());
+            println!("🔍 AWS Uploader: Found {} file(s) to upload", files.len());
+        } else {
+            println!("🔍 AWS Uploader: No files found to upload");
         }
 
         // process files sequentially for now (can be made parallel later)
         for p in files {
-            if let Err(e) = process_file(&self.client, &self.config, &p) {
-                eprintln!("⚠️  failed processing {}: {e:?}", p.display());
+            // Check if file still exists and is still a valid JSON (not already processed)
+            if p.exists() && is_complete_json(&p) {
+                if let Err(e) = process_file(&self.client, &self.config, &p) {
+                    eprintln!("⚠️  failed processing {}: {e:?}", p.display());
+                }
+            } else {
+                println!("🔍 AWS Uploader: Skipping file (no longer valid): {}", p.display());
             }
         }
 
@@ -220,13 +276,118 @@ impl AwsUploader {
     pub fn start_background_uploader() -> Result<()> {
         let uploader = AwsUploader::new()?;
         let scan_secs = uploader.config.scan_interval_secs.unwrap_or(60);
+        let watch_dir = uploader.config.watch_dir.clone();
+        let api_url = uploader.config.api_url.clone();
+        let device_id = uploader.config.device_id.clone();
+        let client = uploader.client.clone();
 
-        // Start background thread
+        // Start file watcher thread
         std::thread::spawn(move || {
-            loop {
-                if let Err(e) = uploader.scan_and_upload() {
-                    eprintln!("⚠️  uploader error: {e:?}");
+            println!("🔍 AWS Uploader: File watcher thread started");
+            
+            // Track currently processing files to prevent duplicates
+            let processing_files: Mutex<HashSet<PathBuf>> = Mutex::new(HashSet::new());
+            
+            // Create file watcher
+            let (tx, rx) = channel();
+            let mut watcher: RecommendedWatcher = match notify::recommended_watcher(move |res| {
+                let _ = tx.send(res);
+            }) {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("⚠️  Failed to create file watcher: {}", e);
+                    return;
                 }
+            };
+            
+            // Watch the memory directory
+            if let Err(e) = watcher.watch(Path::new(&watch_dir), RecursiveMode::NonRecursive) {
+                eprintln!("⚠️  Failed to watch directory {}: {}", watch_dir, e);
+                return;
+            }
+            
+            println!("🔍 AWS Uploader: Watching directory: {}", watch_dir);
+            
+            // Event loop for file changes
+            loop {
+                match rx.recv() {
+                    Ok(Ok(event)) => {
+                        match event.kind {
+                            EventKind::Create(_) | EventKind::Modify(_) => {
+                                for path in event.paths {
+                                    if is_complete_json(&path) {
+                                        let path_buf = PathBuf::from(&path);
+                                        
+                                        // Check if file is already being processed
+                                        {
+                                            let mut processing = processing_files.lock().unwrap();
+                                            if processing.contains(&path_buf) {
+                                                println!("🔍 AWS Uploader: Skipping already processing file: {}", path_buf.display());
+                                                continue;
+                                            }
+                                            // Mark file as being processed
+                                            processing.insert(path_buf.clone());
+                                        }
+                                        
+                                        println!("🔍 AWS Uploader: File event detected: {}", path_buf.display());
+                                        
+                                        // Small delay to ensure file is fully written
+                                        thread::sleep(Duration::from_millis(150));
+                                        
+                                        // Double-check file still exists and is valid before processing
+                                        if !path_buf.exists() || !is_complete_json(&path_buf) {
+                                            println!("🔍 AWS Uploader: File no longer valid, skipping: {}", path_buf.display());
+                                            // Remove from processing set
+                                            {
+                                                let mut processing = processing_files.lock().unwrap();
+                                                processing.remove(&path_buf);
+                                            }
+                                            continue;
+                                        }
+                                        
+                                        // Create temporary config for this file processing
+                                        let temp_config = AwsConfig {
+                                            api_url: api_url.clone(),
+                                            device_id: device_id.clone(),
+                                            watch_dir: watch_dir.clone(),
+                                            scan_interval_secs: Some(scan_secs),
+                                            concurrency: Some(2),
+                                        };
+                                        
+                                        // Process the file
+                                        if let Err(e) = process_file(&client, &temp_config, &path_buf) {
+                                            eprintln!("⚠️  Event-triggered upload failed: {}", e);
+                                        }
+                                        
+                                        // Remove file from processing set
+                                        {
+                                            let mut processing = processing_files.lock().unwrap();
+                                            processing.remove(&path_buf);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {} // Ignore other events
+                        }
+                    }
+                    Ok(Err(e)) => eprintln!("⚠️  File watcher error: {}", e),
+                    Err(_) => {
+                        eprintln!("⚠️  File watcher channel closed");
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Start periodic scan thread (fallback)
+        std::thread::spawn(move || {
+            println!("🔍 AWS Uploader: Background scan thread started, scanning every {} seconds", scan_secs);
+            loop {
+                println!("🔍 AWS Uploader: Starting scan cycle...");
+                if let Err(e) = uploader.scan_and_upload() {
+                    eprintln!("⚠️  AWS Uploader error: {e:?}");
+                }
+                println!("🔍 AWS Uploader: Scan cycle completed, sleeping for {} seconds", scan_secs);
                 thread::sleep(Duration::from_secs(scan_secs));
             }
         });
