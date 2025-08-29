@@ -1,7 +1,7 @@
 import { getSettings, transcribeAudio } from "@/lib";
 import { CompletionState } from "@/types";
 import { useMicVAD } from "@ricky0123/vad-react";
-import { LoaderCircleIcon, MicIcon, MicOffIcon } from "lucide-react";
+import { LoaderCircleIcon, MicIcon } from "lucide-react";
 import React, { useState } from "react";
 import { Button } from "../ui/button";
 
@@ -81,8 +81,8 @@ export const Speech = ({
     console.log("🔍 VAD listening:", vad.listening);
     console.log("🔍 VAD userSpeaking:", vad.userSpeaking);
     console.log("🔍 VAD loading:", vad.loading);
-    console.log("🔍 VAD error:", vad.error);
-  }, [vad.listening, vad.userSpeaking, vad.loading, vad.error]);
+    console.log("🔍 VAD error:", vad.errored);
+  }, [vad.listening, vad.userSpeaking, vad.loading, vad.errored]);
 
   return (
     <>
@@ -97,14 +97,14 @@ export const Speech = ({
             setEnableVAD(true);
           }
         }}
-        className="cursor-pointer"
+        className={`cursor-pointer ${vad.listening ? "bg-gray-800 text-white" : ""}`}
       >
         {isTranscribing ? (
           <LoaderCircleIcon className="h-4 w-4 animate-spin text-green-500" />
         ) : vad.userSpeaking ? (
-          <LoaderCircleIcon className="h-4 w-4 animate-spin" />
+          <div className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
         ) : vad.listening ? (
-          <MicOffIcon className="h-4 w-4 animate-pulse" />
+          <div className="h-2 w-2 animate-pulse bg-red-500 rounded" />
         ) : (
           <MicIcon className="h-4 w-4" />
         )}
