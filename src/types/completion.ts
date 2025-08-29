@@ -23,6 +23,27 @@ export interface ChatConversation {
   updatedAt: number;
 }
 
+export interface AgentToolEvent {
+  id: string;
+  type: "start" | "stream" | "end" | "error";
+  name: string;
+  args?: any;
+  outputChunk?: string;
+  timestamp: number;
+}
+
+// Grouped tool activity (start/end merged)
+export interface ToolActivity {
+  id: string;
+  name: string;
+  status: "in_progress" | "complete" | "error";
+  input?: any | null;
+  output?: any | null;
+  error?: string | null;
+  startedAt: number;
+  endedAt: number | null;
+}
+
 export interface CompletionState {
   input: string;
   response: string;
@@ -31,6 +52,7 @@ export interface CompletionState {
   attachedFiles: AttachedFile[];
   currentConversationId: string | null;
   conversationHistory: ChatMessage[];
+  toolActivities: ToolActivity[];
 }
 
 // Provider-related types

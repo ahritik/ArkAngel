@@ -14,7 +14,6 @@ import { ModelSelection } from "./ModelSelection";
 import { Disclaimer } from "./Disclaimer";
 import { SystemPrompt } from "./SystemPrompt";
 import { Speech } from "./Speech";
-import { CustomProviderComponent } from "../custom-provider";
 import {
   loadSettingsFromStorage,
   saveSettingsToStorage,
@@ -22,19 +21,32 @@ import {
   getProviderById,
 } from "@/lib";
 import { SettingsState } from "@/types";
-import { useCustomProvider } from "@/hooks";
+import { invoke } from "@tauri-apps/api/core";
 export const Settings = () => {
   const [settings, setSettings] = useState<SettingsState>(
     loadSettingsFromStorage
   );
   const { resizeWindow } = useWindowResize();
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
-  const [refreshProviders, setRefreshProviders] = useState(0);
+  const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
+  const [googleConnectMessage, setGoogleConnectMessage] = useState<string | null>(null);
+  const [isGoogleConnected, setIsGoogleConnected] = useState<boolean>(false);
 
   // Save to localStorage whenever settings change
   useEffect(() => {
     saveSettingsToStorage(settings);
   }, [settings]);
+
+  // Check Google connection on mount/open
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const connected = await invoke<boolean>("is_google_connected");
+        setIsGoogleConnected(Boolean(connected));
+      } catch {}
+    };
+    check();
+  }, [isPopoverOpen]);
 
   const updateSettings = (updates: Partial<SettingsState>) => {
     setSettings((prev) => ({ ...prev, ...updates }));
@@ -129,12 +141,6 @@ export const Settings = () => {
 
   const currentProvider = getProviderById(settings.selectedProvider);
 
-  const handleProviderAdded = () => {
-    setRefreshProviders((prev) => prev + 1);
-  };
-
-  const customProviders = useCustomProvider(handleProviderAdded);
-
   useEffect(() => {
     resizeWindow(isPopoverOpen);
   }, [isPopoverOpen, resizeWindow]);
@@ -146,6 +152,34 @@ export const Settings = () => {
   //     setIsPopoverOpen(false);
   //   },
   // });
+
+  const handleConnectGoogle = async () => {
+    try {
+      setIsConnectingGoogle(true);
+      setGoogleConnectMessage(null);
+      const result = await invoke<string>("connect_google_suite");
+      setGoogleConnectMessage(result);
+      setIsGoogleConnected(true);
+    } catch (e: any) {
+      setGoogleConnectMessage(e?.toString?.() || "Failed to connect Google Suite");
+      setIsGoogleConnected(false);
+    } finally {
+      setIsConnectingGoogle(false);
+    }
+  };
+
+  const handleDisconnectGoogle = async () => {
+    try {
+      setIsConnectingGoogle(true);
+      const result = await invoke<string>("disconnect_google_suite");
+      setGoogleConnectMessage(result);
+      setIsGoogleConnected(false);
+    } catch (e: any) {
+      setGoogleConnectMessage(e?.toString?.() || "Failed to disconnect");
+    } finally {
+      setIsConnectingGoogle(false);
+    }
+  };
 
   return (
     <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
@@ -180,8 +214,27 @@ export const Settings = () => {
               </p>
             </div>
 
-            {/* Custom Providers Configuration */}
-            <CustomProviderComponent {...customProviders} />
+            {/* Google Suite Connect */}
+            <div className="flex items-center justify-between gap-2 p-3 rounded-md border border-input/50 bg-background/50">
+              <div className="text-sm">
+                <div className="font-medium">Connect Google Suite</div>
+                <div className="text-xs text-muted-foreground">Authorize access to your Gmail and Calendar</div>
+              </div>
+              <div className="flex items-center gap-2">
+                {googleConnectMessage && (
+                  <span className="text-xs text-muted-foreground max-w-[240px] truncate" title={googleConnectMessage}>{googleConnectMessage}</span>
+                )}
+                {isGoogleConnected ? (
+                  <Button onClick={handleDisconnectGoogle} disabled={isConnectingGoogle} size="sm" variant="secondary">
+                    {isConnectingGoogle ? "Disconnecting..." : "Disconnect"}
+                  </Button>
+                ) : (
+                  <Button onClick={handleConnectGoogle} disabled={isConnectingGoogle} size="sm">
+                    {isConnectingGoogle ? "Connecting..." : "Connect"}
+                  </Button>
+                )}
+              </div>
+            </div>
 
             {/* AI Provider Selection */}
             <ProviderSelection
@@ -203,7 +256,6 @@ export const Settings = () => {
                   modelsFetchError: null,
                 });
               }}
-              refreshKey={refreshProviders}
             />
 
             {/* API Key Configuration */}

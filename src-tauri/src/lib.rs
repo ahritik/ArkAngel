@@ -2,8 +2,13 @@
 mod window;
 mod pii_scrubber;
 mod aws_uploader;
+mod google_oauth;
 
-
+use std::process::{Command as StdCommand, Stdio, Child};
+use std::sync::Mutex;
+use std::thread;
+use std::io::{BufRead, BufReader};
+use tauri::Manager;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -37,26 +42,20 @@ fn write_conversation_to_file(conversation_data: String, filename: String) -> Re
   use std::fs;
   use std::path::Path;
   
-  // First, scrub PII from the conversation data
   let clean_conversation_data = pii_scrubber::scrub_conversation_json(conversation_data)
     .map_err(|e| format!("Failed to scrub PII: {}", e))?;
   
-  // Use the specific project directory path
   let project_dir = Path::new("C:\\Users\\parad\\Downloads\\pluely-master2");
   
-  // Create memory folder path
   let memory_path = project_dir.join("memory");
   
-  // Create memory folder if it doesn't exist
   if !memory_path.exists() {
     fs::create_dir(&memory_path)
       .map_err(|e| format!("Failed to create memory directory: {}", e))?;
   }
   
-  // Create full file path
   let file_path = memory_path.join(filename);
   
-  // Write the clean conversation data to file
   fs::write(&file_path, clean_conversation_data)
     .map_err(|e| format!("Failed to write file: {}", e))?;
   
@@ -66,7 +65,6 @@ fn write_conversation_to_file(conversation_data: String, filename: String) -> Re
 
 #[tauri::command]
 fn trigger_aws_upload() -> Result<String, String> {
-  // Create a new uploader instance and trigger a manual scan
   let uploader = aws_uploader::AwsUploader::new()
     .map_err(|e| format!("Failed to create AWS uploader: {}", e))?;
   
@@ -78,7 +76,7 @@ fn trigger_aws_upload() -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mut builder = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -86,28 +84,111 @@ pub fn run() {
             get_app_version,
             set_window_height,
             write_conversation_to_file,
-            trigger_aws_upload
+            trigger_aws_upload,
+            google_oauth::connect_google_suite,
+            google_oauth::disconnect_google_suite,
+            google_oauth::is_google_connected
         ])
         .setup(|app| {
+            // Make a shared place to store the sidecar child
+            app.manage(Mutex::new(None::<Child>));
+
             // Setup main window positioning
             window::setup_main_window(app).expect("Failed to setup main window");
-            
+
             // Start AWS background uploader (non-blocking)
             if let Err(e) = aws_uploader::AwsUploader::start_background_uploader() {
                 eprintln!("Failed to start AWS uploader: {}", e);
-                // Don't fail the app startup if AWS uploader fails
             } else {
                 println!("AWS background uploader started successfully");
             }
-            
+
+            // Absolute path to sidecar script based on src-tauri dir
+            let script_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../sidecar/dist/server.js");
+            let sidecar_cwd = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../sidecar");
+            println!(
+              "[sidecar] Preparing sidecar. cwd: {:?} script: {:?}",
+              sidecar_cwd, script_path
+            );
+
+            // Always build sidecar to pick up latest changes during dev
+            println!("[sidecar] Running npm run build...");
+            let status = StdCommand::new("npm")
+              .current_dir(&sidecar_cwd)
+              .args(["run", "build"])
+              .status()
+              .map_err(|e| format!("Failed to run sidecar build: {}", e))?;
+            if !status.success() {
+              return Err("Sidecar build failed. Please run `npm --prefix sidecar i && npm --prefix sidecar run build`.".into());
+            }
+            println!("[sidecar] Build completed.");
+
+            // Spawn sidecar
+            println!("[sidecar] Spawning Node...");
+            let mut child = StdCommand::new("node")
+              .current_dir(&sidecar_cwd)
+              .arg(&script_path)
+              .env("AGENT_PORT", "8765")
+              .stdout(Stdio::piped())
+              .stderr(Stdio::piped())
+              .spawn()
+              .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
+
+            // Pipe stdout
+            if let Some(stdout) = child.stdout.take() {
+              thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines() {
+                  if let Ok(l) = line {
+                    println!("[sidecar][stdout] {}", l);
+                  }
+                }
+              });
+            }
+            // Pipe stderr
+            if let Some(stderr) = child.stderr.take() {
+              thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines() {
+                  if let Ok(l) = line {
+                    eprintln!("[sidecar][stderr] {}", l);
+                  }
+                }
+              });
+            }
+
+            // Store handle for later cleanup (ensure guard drops before state)
+            {
+              let state_mutex = app.state::<Mutex<Option<Child>>>();
+              let mut guard = match state_mutex.lock() {
+                Ok(g) => g,
+                Err(_) => return Err("Failed to lock sidecar state mutex".into()),
+              };
+              *guard = Some(child);
+            }
+
             Ok(())
+        })
+        .on_window_event(|w, e| {
+          if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+            api.prevent_close();
+            // Attempt to kill sidecar gently
+            let app_handle = w.app_handle();
+            if let Some(mutex) = app_handle.try_state::<Mutex<Option<Child>>>() {
+              if let Ok(mut guard) = mutex.lock() {
+                if let Some(mut child) = guard.take() {
+                  let _ = child.kill();
+                }
+              }
+            }
+            std::process::exit(0);
+          }
         });
 
-    // Add macOS-specific permissions plugin
     #[cfg(target_os = "macos")]
-    {
-        builder = builder.plugin(tauri_plugin_macos_permissions::init());
-    }
+    let builder = builder.plugin(tauri_plugin_macos_permissions::init());
 
     builder
         .run(tauri::generate_context!())

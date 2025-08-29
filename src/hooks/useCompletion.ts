@@ -2,18 +2,16 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import {
   getSettings,
   fileToBase64,
-  formatMessageForProvider,
-  streamCompletion,
   saveConversation,
   getConversation,
   generateConversationTitle,
-  getProviderById,
 } from "@/lib";
 import {
   AttachedFile,
   CompletionState,
   ChatMessage,
   ChatConversation,
+  ToolActivity,
 } from "@/types";
 
 export const useCompletion = () => {
@@ -25,6 +23,7 @@ export const useCompletion = () => {
     attachedFiles: [],
     currentConversationId: null,
     conversationHistory: [],
+    toolActivities: [],
   });
   const [micOpen, setMicOpen] = useState(false);
   const [enableVAD, setEnableVAD] = useState(false);
@@ -74,37 +73,7 @@ export const useCompletion = () => {
   const submit = useCallback(
     async (speechText?: string) => {
       const input = speechText || state.input;
-      const settings = getSettings();
-      if (
-        !settings?.selectedProvider ||
-        !settings?.apiKey ||
-        !settings?.isApiKeySubmitted
-      ) {
-        setState((prev) => ({
-          ...prev,
-          error: "Please configure your AI provider and API key in settings",
-        }));
-        return;
-      }
 
-      const provider = getProviderById(settings.selectedProvider);
-      if (!provider) {
-        setState((prev) => ({
-          ...prev,
-          error: "Invalid provider selected",
-        }));
-        return;
-      }
-
-      const model =
-        settings.selectedModel || settings.customModel || provider.defaultModel;
-      if (!model) {
-        setState((prev) => ({
-          ...prev,
-          error: "Please select a model in settings",
-        }));
-        return;
-      }
 
       if (!input.trim()) {
         return;
@@ -117,11 +86,9 @@ export const useCompletion = () => {
         }));
       }
 
-      // Cancel any existing request
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
-
       abortControllerRef.current = new AbortController();
 
       setState((prev) => ({
@@ -129,47 +96,154 @@ export const useCompletion = () => {
         isLoading: true,
         error: null,
         response: "",
+        toolActivities: [],
       }));
 
       try {
-        const payload = formatMessageForProvider(
-          provider,
-          input,
-          state.attachedFiles,
-          settings.systemPrompt,
-          state.conversationHistory
-        );
-
         let fullResponse = "";
 
-        await streamCompletion(
-          provider,
-          model,
-          settings.apiKey,
-          payload,
-          (chunk) => {
-            fullResponse += chunk;
-            setState((prev) => ({
-              ...prev,
-              response: prev.response + chunk,
-            }));
-          },
-          (error) => {
-            setState((prev) => ({
-              ...prev,
-              error,
-              isLoading: false,
-            }));
-          },
-          abortControllerRef.current
-        );
+        const url = "http://127.0.0.1:8765/api/chat/stream";
+        console.log("[ui] Connecting to sidecar:", url);
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: input,
+            systemPrompt: getSettings()?.systemPrompt,
+            apiKey: getSettings()?.openAiApiKey || getSettings()?.apiKey || undefined,
+            model: getSettings()?.selectedModel || getSettings()?.customModel || "gpt-4o-mini",
+            providerId: getSettings()?.selectedProvider || "openai",
+          }),
+          signal: abortControllerRef.current.signal,
+        });
 
+        console.log("[ui] Sidecar response status:", res.status, res.statusText);
+        if (!res.ok || !res.body) {
+          throw new Error(`Sidecar error: ${res.status} ${res.statusText}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data:")) continue;
+            const json = line.slice(5).trim();
+            if (!json) continue;
+            try {
+              const evt = JSON.parse(json);
+              const type = evt?.type as string | undefined;
+              if (type === "token") {
+                const chunk = evt.content || "";
+                if (chunk) {
+                  fullResponse += chunk;
+                  setState((prev) => ({ ...prev, response: prev.response + chunk }));
+                }
+              } else if (type === "tool_start") {
+                // Create a new in-progress activity
+                setState((prev) => {
+                  const id = `act_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+                  const activity: ToolActivity = {
+                    id,
+                    name: evt.tool || evt.provider || "unknown_tool",
+                    status: "in_progress",
+                    input: evt.input ?? null,
+                    output: null,
+                    error: null,
+                    startedAt: Date.now(),
+                    endedAt: null,
+                  };
+                  return { ...prev, toolActivities: [...(prev.toolActivities || []), activity] };
+                });
+              } else if (type === "tool_end") {
+                // Update the last in-progress activity for this tool
+                setState((prev) => {
+                  const activities = [...(prev.toolActivities || [])];
+                  const toolName = evt.tool || evt.provider || "unknown_tool";
+                  for (let i = activities.length - 1; i >= 0; i--) {
+                    const a = activities[i];
+                    if (a.name === toolName && a.status === "in_progress") {
+                      activities[i] = {
+                        ...a,
+                        status: "complete",
+                        output: evt.output ?? null,
+                        endedAt: Date.now(),
+                      };
+                      return { ...prev, toolActivities: activities };
+                    }
+                  }
+                  // If no matching start found, append a completed activity
+                  const id = `act_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+                  activities.push({
+                    id,
+                    name: toolName,
+                    status: "complete",
+                    input: null,
+                    output: evt.output ?? null,
+                    error: null,
+                    startedAt: Date.now(),
+                    endedAt: Date.now(),
+                  });
+                  return { ...prev, toolActivities: activities };
+                });
+              } else if (type === "oauth_required") {
+                // Represent as an error-like activity for the provider
+                setState((prev) => ({
+                  ...prev,
+                  toolActivities: [
+                    ...(prev.toolActivities || []),
+                    {
+                      id: `act_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                      name: evt.provider || "oauth",
+                      status: "error",
+                      input: null,
+                      output: null,
+                      error: evt.content || "OAuth is required",
+                      startedAt: Date.now(),
+                      endedAt: Date.now(),
+                    },
+                  ],
+                }));
+              } else if (type === "error") {
+                const errorMsg = evt.error || evt.content || "An error occurred";
+                // Attach to most recent in-progress activity if present, otherwise set global error
+                setState((prev) => {
+                  const activities = [...(prev.toolActivities || [])];
+                  for (let i = activities.length - 1; i >= 0; i--) {
+                    const a = activities[i];
+                    if (a.status === "in_progress") {
+                      activities[i] = {
+                        ...a,
+                        status: "error",
+                        error: errorMsg,
+                        endedAt: Date.now(),
+                      };
+                      return { ...prev, toolActivities: activities };
+                    }
+                  }
+                  return { ...prev, error: errorMsg };
+                });
+              } else if (type === "start" || type === "end" || type === "complete" || type === "response_start") {
+                // ignore control events
+              }
+            } catch (e) {
+              console.warn("[ui] Failed parsing SSE line:", line, e);
+            }
+          }
+        }
+
+        console.log("[ui] Stream finished. Response length:", fullResponse.length);
         setState((prev) => ({ ...prev, isLoading: false }));
 
-        // Save the conversation after successful completion
         if (fullResponse) {
           saveCurrentConversation(input, fullResponse, state.attachedFiles);
-          // Clear input and attached files after saving
           setState((prev) => ({
             ...prev,
             input: "",
@@ -177,6 +251,7 @@ export const useCompletion = () => {
           }));
         }
       } catch (error) {
+        console.error("[ui] Sidecar stream error:", error);
         setState((prev) => ({
           ...prev,
           error: error instanceof Error ? error.message : "An error occurred",
@@ -189,6 +264,7 @@ export const useCompletion = () => {
 
   const cancel = useCallback(() => {
     if (abortControllerRef.current) {
+      console.log("[ui] Aborting sidecar stream");
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
@@ -203,6 +279,7 @@ export const useCompletion = () => {
       response: "",
       error: null,
       attachedFiles: [],
+      toolActivities: [],
     }));
   }, [cancel]);
 
@@ -237,6 +314,7 @@ export const useCompletion = () => {
       error: null,
       isLoading: false,
       attachedFiles: [],
+      toolActivities: [],
     }));
   }, []);
 
@@ -244,7 +322,7 @@ export const useCompletion = () => {
     (
       userMessage: string,
       assistantResponse: string,
-      _attachedFiles: AttachedFile[] // Prefixed with _ to indicate intentionally unused
+      _attachedFiles: AttachedFile[]
     ) => {
       const conversationId =
         state.currentConversationId ||
@@ -256,7 +334,6 @@ export const useCompletion = () => {
         role: "user",
         content: userMessage,
         timestamp,
-        // Don't store attachedFiles to avoid localStorage bloat
       };
 
       const assistantMsg: ChatMessage = {
@@ -298,7 +375,6 @@ export const useCompletion = () => {
     [state.currentConversationId, state.conversationHistory]
   );
 
-  // Listen for conversation events from the main ChatHistory component
   useEffect(() => {
     const handleConversationSelected = (event: any) => {
       const conversation = event.detail;
@@ -311,7 +387,6 @@ export const useCompletion = () => {
 
     const handleConversationDeleted = (event: any) => {
       const deletedId = event.detail;
-      // If the currently active conversation was deleted, start a new one
       if (state.currentConversationId === deletedId) {
         startNewConversation();
       }
@@ -354,12 +429,12 @@ export const useCompletion = () => {
     setEnableVAD,
     micOpen,
     setMicOpen,
-    // Conversation history functions
     currentConversationId: state.currentConversationId,
     conversationHistory: state.conversationHistory,
     loadConversation,
     startNewConversation,
     messageHistoryOpen,
     setMessageHistoryOpen,
+    toolActivities: state.toolActivities,
   };
 };

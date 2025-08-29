@@ -9,11 +9,12 @@ import {
 } from "@/components";
 import { useCompletion, useWindowFocus } from "@/hooks";
 import { useWindowResize } from "@/hooks";
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Speech } from "./Speech";
 import { MessageHistory } from "../history";
+import type { ToolActivity } from "@/types";
 
 export const Completion = () => {
   const {
@@ -40,6 +41,7 @@ export const Completion = () => {
     startNewConversation,
     messageHistoryOpen,
     setMessageHistoryOpen,
+    toolActivities,
   } = useCompletion();
 
   const { resizeWindow } = useWindowResize();
@@ -53,7 +55,6 @@ export const Completion = () => {
         addFile(file);
       }
     });
-    // Reset input so same file can be selected again
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -74,9 +75,8 @@ export const Completion = () => {
     resizeWindow(isPopoverOpen || micOpen || messageHistoryOpen);
   }, [isPopoverOpen, micOpen, messageHistoryOpen, resizeWindow]);
 
-  // Auto scroll to bottom when response updates
   useEffect(() => {
-    if (response && scrollAreaRef.current) {
+    if ((response || toolActivities.length > 0) && scrollAreaRef.current) {
       const scrollElement = scrollAreaRef.current.querySelector(
         "[data-radix-scroll-area-viewport]"
       );
@@ -87,7 +87,7 @@ export const Completion = () => {
         });
       }
     }
-  }, [response]);
+  }, [response, toolActivities.length]);
 
   useWindowFocus({
     onFocusLost: () => {
@@ -95,6 +95,39 @@ export const Completion = () => {
       setMessageHistoryOpen(false);
     },
   });
+
+  // Sort tool activities chronologically for display
+  const sortedActivities = useMemo(
+    () => [...(toolActivities || [])].sort((a, b) => a.startedAt - b.startedAt),
+    [toolActivities]
+  );
+
+  // Helper: pretty print JSON if possible, else return string
+  const toPrettyText = (value: any): { text: string; isJson: boolean } => {
+    try {
+      if (typeof value === "string") {
+        const parsed = JSON.parse(value);
+        return { text: JSON.stringify(parsed, null, 2), isJson: true };
+      }
+      return { text: JSON.stringify(value, null, 2), isJson: true };
+    } catch {
+      return { text: typeof value === "string" ? value : String(value), isJson: false };
+    }
+  };
+
+  // Helper: badge color per status
+  const statusBadgeClass = (s: ToolActivity["status"]) => {
+    switch (s) {
+      case "in_progress":
+        return "bg-amber-100 text-amber-700 border-amber-200";
+      case "complete":
+        return "bg-green-100 text-green-700 border-green-200";
+      case "error":
+        return "bg-red-100 text-red-700 border-red-200";
+      default:
+        return "bg-muted text-foreground border-muted";
+    }
+  };
 
   return (
     <>
@@ -162,7 +195,6 @@ export const Completion = () => {
                 }`}
               />
 
-              {/* Conversation thread indicator */}
               {currentConversationId &&
                 conversationHistory.length > 0 &&
                 !isLoading && (
@@ -177,7 +209,6 @@ export const Completion = () => {
                   </div>
                 )}
 
-              {/* Loading indicator */}
               {isLoading && (
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 animate-pulse">
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -186,7 +217,6 @@ export const Completion = () => {
             </div>
           </PopoverTrigger>
 
-          {/* Response Panel */}
           <PopoverContent
             align="center"
             side="bottom"
@@ -234,6 +264,79 @@ export const Completion = () => {
                   </div>
                 )}
 
+                {/* Tool activities shown first, in chronological order */}
+                {sortedActivities.length > 0 && (
+                  <div className="mb-4">
+                    <div className="text-xs font-semibold mb-2 select-none">Tool activity</div>
+                    <div className="space-y-2 text-xs">
+                      {sortedActivities.map((a: ToolActivity) => {
+                        const hasInput = a.input !== undefined && a.input !== null;
+                        const hasOutput = a.output !== undefined && a.output !== null;
+                        const hasError = !!a.error;
+                        const inputPretty = hasInput ? toPrettyText(a.input) : null;
+                        const outputPretty = hasOutput ? toPrettyText(a.output) : null;
+
+                        return (
+                          <details
+                            key={a.id}
+                            className={`tool-activity ${a.status === "in_progress" ? "loading" : ""} p-2 rounded border bg-muted/20 overflow-hidden`}
+                          >
+                            <summary className="flex items-center justify-between cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+                              {/* Left: tool name + status */}
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded border flex-shrink-0 ${statusBadgeClass(a.status)}`}>
+                                  {a.status === "in_progress" ? "RUNNING" : a.status === "complete" ? "DONE" : "ERROR"}
+                                </span>
+                                <span className="font-medium truncate">{a.name}</span>
+                              </div>
+                              {/* Right: error badge (if any) + timestamp + chevron */}
+                              <div className="flex items-center gap-2 text-muted-foreground flex-shrink-0">
+                                {hasError && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded border bg-red-100 text-red-700 border-red-200">Error</span>
+                                )}
+                                <span className="text-[10px]">{new Date(a.endedAt || a.startedAt).toLocaleTimeString()}</span>
+                                <svg className="h-3 w-3 transition-transform duration-200 [details[open]_&]:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                              </div>
+                            </summary>
+
+                            <div className="mt-2 space-y-2 overflow-hidden">
+                              {hasInput && inputPretty && (
+                                <div className="overflow-hidden">
+                                  <div className="text-muted-foreground mb-1">Input</div>
+                                  <pre className={`text-[10px] whitespace-pre-wrap break-words break-all p-2 rounded border overflow-x-auto max-w-full ${inputPretty.isJson ? "bg-muted" : "bg-transparent"}`}>
+                                    {inputPretty.text}
+                                  </pre>
+                                </div>
+                              )}
+
+                              {hasOutput && outputPretty && (
+                                <div className="overflow-hidden">
+                                  <div className="text-muted-foreground mb-1">Output</div>
+                                  <pre className={`text-[10px] whitespace-pre-wrap break-words break-all p-2 rounded border overflow-x-auto max-w-full ${outputPretty.isJson ? "bg-muted" : "bg-transparent"}`}>
+                                    {outputPretty.text}
+                                  </pre>
+                                </div>
+                              )}
+
+                              {hasError && (
+                                <div className="overflow-hidden">
+                                  <div className="text-muted-foreground mb-1">Error</div>
+                                  <pre className="text-[10px] whitespace-pre-wrap break-words break-all p-2 rounded border bg-red-50 text-red-700 border-red-200 overflow-x-auto max-w-full">
+                                    {a.error}
+                                  </pre>
+                                </div>
+                              )}
+                            </div>
+                          </details>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Assistant response shown after tool activity */}
                 {response && (
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
@@ -279,7 +382,6 @@ export const Completion = () => {
           <PaperclipIcon className="h-4 w-4" />
         </Button>
 
-        {/* File count badge */}
         {attachedFiles.length > 0 && (
           <div className="absolute -top-2 -right-2 bg-primary-foreground text-primary rounded-full h-5 w-5 flex border border-primary items-center justify-center text-xs font-medium">
             {attachedFiles.length}
