@@ -3,6 +3,8 @@ import cors from 'cors'
 import { ChatOpenAI } from '@langchain/openai'
 import { MCPAgent, MCPClient } from 'mcp-use'
 import 'dotenv/config'
+import fs from 'fs'
+import path from 'path'
 
 const app = express()
 const port = Number(process.env.AGENT_PORT || process.env.PORT || 8765)
@@ -20,36 +22,21 @@ app.use((req, _res, next) => {
 // Initialize MCP client (shared)
 const config = {
   mcpServers: {
-    // "google-calendar": {
-    //   command: "npx",
-    //   args: ["@cocal/google-calendar-mcp"],
-    //   env: {
-    //     GOOGLE_OAUTH_CREDENTIALS: "public/gcp-oauth.keys.json"
-    //   }
-    // }, 
-
-    calendar: {
-      command: "npx",
+    google_workspace: {
+      command: "uvx",
       args: [
-        "@gongrzhe/server-calendar-autoauth-mcp"
-      ]
-    }, 
-    //playwright: { command: 'npx', args: ['@playwright/mcp@latest'] },
-    // exa: {
-    //   command: 'npx',
-    //   args: [
-    //     '-y',
-    //     'exa-mcp-server',
-    //     '--tools=web_search_exa,company_research,crawling,linkedin_search,deep_researcher_start,deep_researcher_check'
-    //   ],
-    //   env: {
-    //     EXA_API_KEY: process.env.EXA_API_KEY
-    //   }
-    // },
-    gmail: {
-      command: 'npx',
-      args: [
-        '@gongrzhe/server-gmail-autoauth-mcp'
+        "workspace-mcp",
+        "--tools",
+        "gmail",
+        "drive",
+        "calendar",
+       // "docs",
+        "sheets",
+        "chat",
+        "forms",
+        "slides",
+        "tasks",
+        "search"
       ]
     }
   }
@@ -67,8 +54,47 @@ function stringifyPreview(value: unknown, maxLen: number = 300): string {
   }
 }
 
+function getCredentialStoreDir(): string {
+  const envDir = process.env.GOOGLE_MCP_CREDENTIALS_DIR
+  if (envDir && envDir.trim()) return envDir
+  const home = process.env.HOME || process.env.USERPROFILE || ''
+  if (home) return path.join(home, '.google_workspace_mcp', 'credentials')
+  return path.join(process.cwd(), '.credentials')
+}
+
+function readFirstCredentialEmail(): string | null {
+  try {
+    const dir = getCredentialStoreDir()
+    if (!fs.existsSync(dir)) return null
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'))
+    if (files.length === 0) return null
+    // If there are multiple, prefer a file that looks like an email filename
+    const emailLike = files.find(f => f.includes('@')) || files[0]
+    const email = emailLike.replace(/\.json$/i, '')
+    return email
+  } catch {
+    return null
+  }
+}
+
+function readScopesForEmail(email: string): string[] {
+  try {
+    const dir = getCredentialStoreDir()
+    const p = path.join(dir, `${email}.json`)
+    if (!fs.existsSync(p)) return []
+    const raw = fs.readFileSync(p, 'utf-8')
+    const json = JSON.parse(raw)
+    const scopes = Array.isArray(json?.scopes) ? json.scopes : []
+    return scopes.filter((s: unknown) => typeof s === 'string')
+  } catch {
+    return []
+  }
+}
+
 function enhanceSystemPromptWithDateTime(systemPrompt?: string): string {
   const now = new Date()
+  const resolvedEmail = readFirstCredentialEmail() || 'unknown'
+  const scopes = resolvedEmail !== 'unknown' ? readScopesForEmail(resolvedEmail) : []
   
   const dateTimeInfo = `CURRENT DATE & TIME CONTEXT:
 - Current Date: ${now.toLocaleDateString('en-US', { 
@@ -86,6 +112,8 @@ function enhanceSystemPromptWithDateTime(systemPrompt?: string): string {
   })}
 - Timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}
 - ISO Timestamp: ${now.toISOString()}
+- User Google Email: ${resolvedEmail}
+- Enabled Google Scopes (${scopes.length}): ${scopes.join(', ')}
 
 IMPORTANT: When working with calendar events, scheduling, or time-sensitive tasks, always consider this current date/time context. The user's computer timezone is ${Intl.DateTimeFormat().resolvedOptions().timeZone}, but calendar events may be in different timezones.
 
