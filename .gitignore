@@ -1,0 +1,94 @@
+﻿# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables and secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+.env.*
+
+# API Keys and Secrets
+client_secret*.json
+*secret*.json
+*key*.json
+*credential*.json
+
+# Build outputs
+dist/
+build/
+target/
+*.exe
+*.msi
+*.dmg
+*.deb
+*.AppImage
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# Temporary folders
+tmp/
+temp/
+
+# Memory and conversation files
+memory/
+*.json.synced
+
+# Uploads
+uploads/
+src-tauri/uploads/
+
+# AWS credentials
+.aws/
+aws-credentials.json
+
+# Google OAuth
+google_oauth_credentials.json
+
+# Rust build artifacts
+Cargo.lock
+target/
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.a
+*.so
+*.dylib
+*.dll
+
+# Tauri build outputs
+src-tauri/target/
+src-tauri/dist/
