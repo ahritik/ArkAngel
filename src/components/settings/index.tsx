@@ -14,7 +14,6 @@ import { ModelSelection } from "./ModelSelection";
 import { Disclaimer } from "./Disclaimer";
 import { SystemPrompt } from "./SystemPrompt";
 import { Speech } from "./Speech";
-import { FileUploadSettings } from "./FileUploadSettings";
 import {
   loadSettingsFromStorage,
   saveSettingsToStorage,
@@ -308,8 +307,7 @@ export const Settings = () => {
               onChange={(value) => updateSettings({ systemPrompt: value })}
             />
 
-            {/* File Upload Settings */}
-            <FileUploadSettings />
+            {/* File Upload Settings (temporarily removed) */}
           </div>
 
           <div className="pb-4 flex items-center justify-center">

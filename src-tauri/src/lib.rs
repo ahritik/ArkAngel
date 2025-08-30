@@ -167,58 +167,75 @@ pub fn run() {
 
             // Always build sidecar to pick up latest changes during dev
             println!("[sidecar] Running npm run build...");
-            let status = StdCommand::new("C:\\nvm4w\\nodejs\\npm.cmd")
-              .current_dir(&sidecar_cwd)
-              .args(["run", "build"])
-              .status()
-              .map_err(|e| format!("Failed to run sidecar build: {}", e))?;
-            if !status.success() {
-              return Err("Sidecar build failed. Please run `npm --prefix sidecar i && npm --prefix sidecar run build`.".into());
+            let build_ok = if cfg!(target_os = "windows") {
+              StdCommand::new("npm.cmd")
+                .current_dir(&sidecar_cwd)
+                .args(["run", "build"])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+            } else {
+              // Use a shell so user PATH/env is respected (nvm, brew, etc.)
+              StdCommand::new("/bin/sh")
+                .current_dir(&sidecar_cwd)
+                .arg("-lc")
+                .arg("npm run build")
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+            };
+            if !build_ok {
+              eprintln!("[sidecar] npm build failed or npm not found. Will continue if dist exists.");
+            } else {
+              println!("[sidecar] Build completed.");
             }
-            println!("[sidecar] Build completed.");
 
-            // Spawn sidecar
-            println!("[sidecar] Spawning Node...");
-            let mut child = StdCommand::new("node")
-              .current_dir(&sidecar_cwd)
-              .arg(&script_path)
-              .env("AGENT_PORT", "8765")
-              .stdout(Stdio::piped())
-              .stderr(Stdio::piped())
-              .spawn()
-              .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
+            // Spawn sidecar only if built script exists
+            if !script_path.exists() {
+              eprintln!("[sidecar] Sidecar script not found at {:?}. Skipping sidecar.", script_path);
+            } else {
+              println!("[sidecar] Spawning Node...");
+              let mut child = StdCommand::new("node")
+                .current_dir(&sidecar_cwd)
+                .arg(&script_path)
+                .env("AGENT_PORT", "8765")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
 
-            // Pipe stdout
-            if let Some(stdout) = child.stdout.take() {
-              thread::spawn(move || {
-                let reader = BufReader::new(stdout);
-                for line in reader.lines() {
-                  if let Ok(l) = line {
-                    println!("[sidecar][stdout] {}", l);
+              // Pipe stdout
+              if let Some(stdout) = child.stdout.take() {
+                thread::spawn(move || {
+                  let reader = BufReader::new(stdout);
+                  for line in reader.lines() {
+                    if let Ok(l) = line {
+                      println!("[sidecar][stdout] {}", l);
+                    }
                   }
-                }
-              });
-            }
-            // Pipe stderr
-            if let Some(stderr) = child.stderr.take() {
-              thread::spawn(move || {
-                let reader = BufReader::new(stderr);
-                for line in reader.lines() {
-                  if let Ok(l) = line {
-                    eprintln!("[sidecar][stderr] {}", l);
+                });
+              }
+              // Pipe stderr
+              if let Some(stderr) = child.stderr.take() {
+                thread::spawn(move || {
+                  let reader = BufReader::new(stderr);
+                  for line in reader.lines() {
+                    if let Ok(l) = line {
+                      eprintln!("[sidecar][stderr] {}", l);
+                    }
                   }
-                }
-              });
-            }
+                });
+              }
 
-            // Store handle for later cleanup (ensure guard drops before state)
-            {
-              let state_mutex = app.state::<Mutex<Option<Child>>>();
-              let mut guard = match state_mutex.lock() {
-                Ok(g) => g,
-                Err(_) => return Err("Failed to lock sidecar state mutex".into()),
-              };
-              *guard = Some(child);
+              // Store handle for later cleanup (ensure guard drops before state)
+              {
+                let state_mutex = app.state::<Mutex<Option<Child>>>();
+                let mut guard = match state_mutex.lock() {
+                  Ok(g) => g,
+                  Err(_) => return Err("Failed to lock sidecar state mutex".into()),
+                };
+                *guard = Some(child);
+              }
             }
 
             Ok(())
