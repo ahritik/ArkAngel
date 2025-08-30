@@ -61,122 +61,66 @@ fn save_tokens(app: &tauri::AppHandle, tokens: &GoogleTokens) -> Result<()> {
   let json = serde_json::to_string_pretty(tokens)?;
   fs::write(&path, json)?;
   
-  // Automatically bridge tokens to MCP directories and credential store
+  // Automatically bridge tokens to MCP directories
   let _ = bridge_tokens_to_mcp(app, tokens);
   
   Ok(())
 }
 
-fn extract_email_from_id_token(id_token: &str) -> Option<String> {
-  let parts: Vec<&str> = id_token.split('.').collect();
-  if parts.len() != 3 { return None; }
-  let payload_b64 = parts[1];
-  let pad_len = (4 - (payload_b64.len() % 4)) % 4;
-  let padded = format!("{}{}", payload_b64, "=".repeat(pad_len));
-  let decoded = base64::engine::general_purpose::URL_SAFE.decode(padded).ok()?;
-  let payload: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
-  payload.get("email").and_then(|e| e.as_str()).map(|s| s.to_string())
-}
-
-fn get_user_email_from_api(access_token: &str) -> Option<String> {
-  let client = reqwest::blocking::Client::new();
-  let resp = client
-    .get("https://openidconnect.googleapis.com/v1/userinfo")
-    .bearer_auth(access_token)
-    .send()
-    .ok()?;
-  if !resp.status().is_success() { return None; }
-  let v: serde_json::Value = resp.json().ok()?;
-  v.get("email").and_then(|e| e.as_str()).map(|s| s.to_string())
-}
-
 fn bridge_tokens_to_mcp(_app: &tauri::AppHandle, tokens: &GoogleTokens) -> Result<()> {
-  // Determine user email
-  let user_email = if let Some(ref idt) = tokens.id_token {
-    extract_email_from_id_token(idt)
-  } else { None }
-  .or_else(|| get_user_email_from_api(&tokens.access_token))
-  .unwrap_or_else(|| "default@example.com".to_string());
-
-  // Compute expiry as ISO8601 naive string (YYYY-MM-DDTHH:MM:SS[.ffffff])
-  let expiry_iso: Option<String> = if let Some(expires_in) = tokens.expires_in {
-    let expiry_ms: u128 = tokens.obtained_at_ms + (expires_in as u128 * 1000);
-    let secs = (expiry_ms / 1000) as i64;
-    let nanos = ((expiry_ms % 1000) as u32) * 1_000_000;
-    if let Some(naive) = chrono::NaiveDateTime::from_timestamp_opt(secs, nanos) {
-      Some(naive.format("%Y-%m-%dT%H:%M:%S%.6f").to_string())
-    } else { None }
-  } else { None };
-
-  // Prepare credentials in the Python store format
-  let scopes_vec: Vec<String> = tokens
-    .scope
-    .as_ref()
-    .map(|s| s.split(' ').map(|x| x.to_string()).collect())
-    .unwrap_or_else(|| Vec::new());
-
-  let store_credentials = serde_json::json!({
-    "token": tokens.access_token,
-    "refresh_token": tokens.refresh_token,
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "client_id": std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default(),
-    "client_secret": std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default(),
-    "scopes": scopes_vec,
-    "expiry": expiry_iso,
+  // Create MCP-compatible credentials format
+  let mcp_credentials = serde_json::json!({
+      "access_token": tokens.access_token,
+      "refresh_token": tokens.refresh_token,
+      "scope": tokens.scope,
+      "token_type": tokens.token_type.as_ref().unwrap_or(&"Bearer".to_string()),
+      "expiry_date": if let Some(expires_in) = tokens.expires_in {
+          tokens.obtained_at_ms + (expires_in as u128 * 1000)
+      } else {
+          tokens.obtained_at_ms + (3600 * 1000) // Default 1 hour
+      }
   });
-
-  // Write to ~/.google_workspace_mcp/credentials/{email}.json (or GOOGLE_MCP_CREDENTIALS_DIR)
-  let base_dir = if let Ok(dir) = std::env::var("GOOGLE_MCP_CREDENTIALS_DIR") {
-    std::path::PathBuf::from(dir)
-  } else if let Some(home) = dirs::home_dir() {
-    home.join(".google_workspace_mcp").join("credentials")
-  } else {
-    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-      .join(".credentials")
-  };
-  fs::create_dir_all(&base_dir)?;
-  let user_path = base_dir.join(format!("{}.json", user_email));
-  let json_str = serde_json::to_string_pretty(&store_credentials)?;
-  fs::write(&user_path, json_str)?;
-
-  // Maintain existing legacy MCP outputs for Calendar/Gmail
+  
+  // Get home directory
   let home_dir = dirs::home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
+  
+  // Create both calendar and gmail MCP config directories
   let calendar_config_dir = home_dir.join(".calendar-mcp");
   let gmail_config_dir = home_dir.join(".gmail-mcp");
+  
   fs::create_dir_all(&calendar_config_dir)?;
   fs::create_dir_all(&gmail_config_dir)?;
-
-  let legacy = serde_json::json!({
-    "access_token": tokens.access_token,
-    "refresh_token": tokens.refresh_token,
-    "scope": tokens.scope,
-    "token_type": tokens.token_type.as_ref().unwrap_or(&"Bearer".to_string()),
-    "expiry_date": if let Some(expires_in) = tokens.expires_in { tokens.obtained_at_ms + (expires_in as u128 * 1000) } else { tokens.obtained_at_ms + (3600 * 1000) }
-  });
+  
+  // Write credentials for both services
   let calendar_creds_path = calendar_config_dir.join("credentials.json");
   let gmail_creds_path = gmail_config_dir.join("credentials.json");
-  let legacy_json = serde_json::to_string_pretty(&legacy)?;
-  fs::write(&calendar_creds_path, &legacy_json)?;
-  fs::write(&gmail_creds_path, &legacy_json)?;
-
+  
+  let creds_json = serde_json::to_string_pretty(&mcp_credentials)?;
+  fs::write(&calendar_creds_path, &creds_json)?;
+  fs::write(&gmail_creds_path, &creds_json)?;
+  
+  // Create OAuth client config for both services if env vars are available
   if let Ok(client_id) = std::env::var("GOOGLE_CLIENT_ID") {
-    let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
-    let oauth_config = serde_json::json!({
-      "installed": {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "redirect_uris": ["http://localhost:3000/oauth2callback"]
-      }
-    });
-    let calendar_oauth_path = calendar_config_dir.join("gcp-oauth.keys.json");
-    let gmail_oauth_path = gmail_config_dir.join("gcp-oauth.keys.json");
-    let oauth_json = serde_json::to_string_pretty(&oauth_config)?;
-    fs::write(&calendar_oauth_path, &oauth_json)?;
-    fs::write(&gmail_oauth_path, &oauth_json)?;
+      let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+      
+      let oauth_config = serde_json::json!({
+          "installed": {
+              "client_id": client_id,
+              "client_secret": client_secret,
+              "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+              "token_uri": "https://oauth2.googleapis.com/token",
+              "redirect_uris": ["http://localhost:3000/oauth2callback"]
+          }
+      });
+      
+      let calendar_oauth_path = calendar_config_dir.join("gcp-oauth.keys.json");
+      let gmail_oauth_path = gmail_config_dir.join("gcp-oauth.keys.json");
+      
+      let oauth_json = serde_json::to_string_pretty(&oauth_config)?;
+      fs::write(&calendar_oauth_path, &oauth_json)?;
+      fs::write(&gmail_oauth_path, &oauth_json)?;
   }
-
+  
   Ok(())
 }
 
@@ -214,23 +158,6 @@ pub fn disconnect_google_suite(app: tauri::AppHandle) -> Result<String, String> 
     }
     let _ = fs::remove_file(&path);
   }
-
-  // Remove MCP credential store files
-  let base_dir = if let Ok(dir) = std::env::var("GOOGLE_MCP_CREDENTIALS_DIR") {
-    std::path::PathBuf::from(dir)
-  } else if let Some(home) = dirs::home_dir() {
-    home.join(".google_workspace_mcp").join("credentials")
-  } else {
-    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-      .join(".credentials")
-  };
-  if let Ok(entries) = fs::read_dir(&base_dir) {
-    for entry in entries.flatten() {
-      if entry.path().extension().and_then(|s| s.to_str()) == Some("json") {
-        let _ = fs::remove_file(entry.path());
-      }
-    }
-  }
   Ok("Disconnected from Google Suite".to_string())
 }
 
@@ -244,49 +171,11 @@ pub fn connect_google_suite(app: tauri::AppHandle) -> Result<String, String> {
   // Prefer PKCE flow (no need for client secret), but allow secret if present
   let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").ok();
 
-  // Scopes for Google services (broad access for MCP tools)
+  // Scopes for Gmail and Calendar (read and write access for MCP servers)
   let scopes = vec![
-    // Gmail
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.compose",
-    "https://www.googleapis.com/auth/gmail.labels",
-    // Calendar
     "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/calendar.readonly",
-    "https://www.googleapis.com/auth/calendar.events",
-    // Drive
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/drive.readonly",
-    // Docs
-    "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/documents.readonly",
-    // Sheets
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/spreadsheets.readonly",
-    // Slides
-    "https://www.googleapis.com/auth/presentations",
-    "https://www.googleapis.com/auth/presentations.readonly",
-    // Tasks
-    "https://www.googleapis.com/auth/tasks",
-    "https://www.googleapis.com/auth/tasks.readonly",
-    // Forms
-    "https://www.googleapis.com/auth/forms.body",
-    "https://www.googleapis.com/auth/forms.body.readonly",
-    "https://www.googleapis.com/auth/forms.responses.readonly",
-    // Chat (user-level scopes)
-    "https://www.googleapis.com/auth/chat.messages",
-    "https://www.googleapis.com/auth/chat.messages.readonly",
-    "https://www.googleapis.com/auth/chat.memberships",
-    "https://www.googleapis.com/auth/chat.memberships.readonly",
-    "https://www.googleapis.com/auth/chat.spaces",
-    "https://www.googleapis.com/auth/chat.spaces.readonly",
-    // OpenID / user info
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
   ].join(" ");
 
   // Start ephemeral local server for OAuth redirect
