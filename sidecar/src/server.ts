@@ -91,6 +91,17 @@ function readScopesForEmail(email: string): string[] {
   }
 }
 
+function isPdfQuestion(message: string): boolean {
+  const lowerMessage = message.toLowerCase()
+  const pdfKeywords = [
+    'pdf', 'document', 'file', 'what\'s in', 'content',
+    'extract', 'read', 'analyze', 'on page', 'section',
+    'in the document', 'from the file'
+  ]
+  
+  return pdfKeywords.some(keyword => lowerMessage.includes(keyword))
+}
+
 function enhanceSystemPromptWithDateTime(systemPrompt?: string): string {
   const now = new Date()
   const resolvedEmail = readFirstCredentialEmail() || 'unknown'
@@ -122,19 +133,32 @@ ${systemPrompt || 'You are a helpful AI assistant with access to calendar, email
   return dateTimeInfo.trim()
 }
 
-function createAgent(opts: { providerId?: string; model?: string; apiKey?: string; systemPrompt?: string }) {
+function createAgent(opts: { providerId?: string; model?: string; apiKey?: string; systemPrompt?: string, disableMCP?: boolean }) {
   const provider = (opts.providerId || 'openai').toLowerCase()
   const model = opts.model || 'gpt-4o-mini'
   const apiKey = opts.apiKey || process.env.OPENAI_API_KEY
   if (!apiKey) {
     throw new Error('OPENAI_API_KEY is missing. Provide it in request body or environment.')
   }
+
   if (provider !== 'openai') {
     console.warn('[sidecar] Only OpenAI is wired here; using ChatOpenAI with provided key.')
   }
   const llm = new ChatOpenAI({ model, temperature: 0.5, streaming: true, apiKey })
-  const agent = new MCPAgent({ llm: llm as any, client, maxSteps: 20 })
-  return { agent, systemPrompt: opts.systemPrompt }
+  
+  if (opts.disableMCP) {
+    // For PDF questions, return just the LLM (no MCP agent at all)
+    return { llm, systemPrompt: opts.systemPrompt, isPDFMode: true }
+  } else {
+    // For action questions, use MCP agent with tools
+    const agent = new MCPAgent({ 
+      llm: llm as any, 
+      client, 
+      maxSteps: 20,
+      disallowedTools: ["shell", "file_system", "network"] // Block risky tools, keep calendar/gmail
+    })
+    return { agent, systemPrompt: opts.systemPrompt, isPDFMode: false }
+  }
 }
 
 class StreamingMCPAgent {
@@ -288,7 +312,7 @@ class StreamingMCPAgent {
 // Streaming chat endpoint
 app.post('/api/chat/stream', async (req, res) => {
   try {
-    const { message, apiKey, model, providerId, systemPrompt } = req.body || {}
+    const { message, apiKey, model, providerId, systemPrompt, fileContext } = req.body || {}
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' })
@@ -315,16 +339,73 @@ app.post('/api/chat/stream', async (req, res) => {
 
     res.write(`data: ${JSON.stringify({ type: 'start' })}\n\n`)
 
-    try {
-      const { agent, systemPrompt: derivedSystemPrompt } = createAgent({ apiKey: effectiveKey, model, providerId, systemPrompt })
-      const streamingAgent = new StreamingMCPAgent(agent, (event) => {
-        res.write(`data: ${JSON.stringify(event)}\n\n`)
-      })
+          try {
+        // Detect if this is a PDF question and disable MCP tools accordingly
+        const disableMCP = isPdfQuestion(message)
+        console.log(`[sidecar] Question type: ${disableMCP ? 'PDF/Document (LLM only)' : 'Action/Tool (MCP enabled)'}`)
+        
+        const result = createAgent({ 
+          apiKey: effectiveKey, 
+          model, 
+          providerId, 
+          systemPrompt,
+          disableMCP 
+        })
+        
+                if (result.isPDFMode) {
+          // PDF mode: Use LLM streaming with file context
+          const { llm, systemPrompt: derivedSystemPrompt } = result
+          
+          // Add file context if available
+          let enhancedSystemPrompt = enhanceSystemPromptWithDateTime(derivedSystemPrompt)
+          if (fileContext && fileContext.length > 0) {
+            const fileContent = fileContext.join('\n\n---\n\n');
+            enhancedSystemPrompt = `${enhancedSystemPrompt}\n\nFile Context:\n\n${fileContent}`;
+          }
+          
+          // Send response start event
+          res.write(`data: ${JSON.stringify({ type: 'response_start', content: 'Response:' })}\n\n`)
+          
+          // Use LLM streaming (word by word)
+          const stream = await llm.stream([
+            { role: "system", content: enhancedSystemPrompt },
+            { role: "user", content: message }
+          ])
+          
+          // Process each token and send as streaming events
+          for await (const chunk of stream) {
+            if (chunk.content) {
+              res.write(`data: ${JSON.stringify({ type: 'token', content: chunk.content })}\n\n`)
+            }
+          }
+          
+          // Send completion event
+          res.write(`data: ${JSON.stringify({ type: 'complete', timestamp: new Date().toISOString() })}\n\n`)
+          
+        } else {
+           // Action mode: Use MCP agent with streaming
+           const { agent, systemPrompt: derivedSystemPrompt } = result
+           const streamingAgent = new StreamingMCPAgent(agent, (event) => {
+             res.write(`data: ${JSON.stringify(event)}\n\n`)
+           })
+           
+           // Use systemPrompt if provided, otherwise just the message
+           let enhancedSystemPrompt = enhanceSystemPromptWithDateTime(derivedSystemPrompt)
+           
+           // Add file context if available
+           if (fileContext && fileContext.length > 0) {
+             const fileContent = fileContext.join('\n\n---\n\n');
+             enhancedSystemPrompt = `${enhancedSystemPrompt}\n\nFile Context:\n\n${fileContent}`;
+           }
+           
+           const finalMessage = `${enhancedSystemPrompt}\n\n${message}`
+           await streamingAgent.run(finalMessage)
+         }
 
-      // Use systemPrompt if provided, otherwise just the message
-      const enhancedSystemPrompt = enhanceSystemPromptWithDateTime(derivedSystemPrompt)
-      const finalMessage = `${enhancedSystemPrompt}\n\n${message}`
-      await streamingAgent.run(finalMessage)
+      res.write(`data: ${JSON.stringify({ 
+        type: 'complete', 
+        timestamp: new Date().toISOString()
+      })}\n\n`)
 
       res.write(`data: ${JSON.stringify({ 
         type: 'complete', 
@@ -356,7 +437,7 @@ app.post('/api/chat/stream', async (req, res) => {
 // Non-streaming chat endpoint (fallback)
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, apiKey, model, providerId, systemPrompt } = req.body || {}
+    const { message, apiKey, model, providerId, systemPrompt, fileContext } = req.body || {}
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' })

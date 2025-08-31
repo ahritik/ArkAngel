@@ -102,6 +102,15 @@ export const useCompletion = () => {
       try {
         let fullResponse = "";
 
+        // Fetch file context if available
+        let fileContext: string[] | undefined = undefined;
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          fileContext = await invoke<string[]>('get_file_context');
+        } catch (error) {
+          console.warn("Failed to fetch file context:", error);
+        }
+
         const url = "http://127.0.0.1:8765/api/chat/stream";
         console.log("[ui] Connecting to sidecar:", url);
         const res = await fetch(url, {
@@ -113,6 +122,7 @@ export const useCompletion = () => {
             apiKey: getSettings()?.openAiApiKey || getSettings()?.apiKey || undefined,
             model: getSettings()?.selectedModel || getSettings()?.customModel || "gpt-4o-mini",
             providerId: getSettings()?.selectedProvider || "openai",
+            fileContext: fileContext, // Pass file context to sidecar
           }),
           signal: abortControllerRef.current.signal,
         });

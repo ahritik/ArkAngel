@@ -47,7 +47,11 @@ sha2 = "0.10"
 base64 = { version = "0.21", default-features = false, features = ["alloc"] }
 urlencoding = "2"
 dirs = "5.0"
+# File storage dependencies
+uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
+# PDF text extraction
+pdf-extract = "0.9"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-macos-permissions = "2"

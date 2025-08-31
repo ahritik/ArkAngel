@@ -12,7 +12,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "mcp-use": "^0.0.6"
+    "mcp-use": "^0.1.17"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -20,4 +20,4 @@
     "@types/node": "^22.7.4",
     "typescript": "^5.4.5"
   }
-} 
+}

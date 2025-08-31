@@ -14,6 +14,7 @@ import { ModelSelection } from "./ModelSelection";
 import { Disclaimer } from "./Disclaimer";
 import { SystemPrompt } from "./SystemPrompt";
 import { Speech } from "./Speech";
+import { FileUploadSettings } from "./FileUploadSettings";
 import {
   loadSettingsFromStorage,
   saveSettingsToStorage,
@@ -41,9 +42,13 @@ export const Settings = () => {
   useEffect(() => {
     const check = async () => {
       try {
+        console.log('[Settings][Google] Checking connection status...')
         const connected = await invoke<boolean>("is_google_connected");
+        console.log('[Settings][Google] Status response:', connected)
         setIsGoogleConnected(Boolean(connected));
-      } catch {}
+      } catch (err) {
+        console.error('[Settings][Google] Failed to check connection status:', err)
+      }
     };
     check();
   }, [isPopoverOpen]);
@@ -155,29 +160,49 @@ export const Settings = () => {
 
   const handleConnectGoogle = async () => {
     try {
+      console.log('[Settings][Google] Starting connect flow...')
       setIsConnectingGoogle(true);
       setGoogleConnectMessage(null);
       const result = await invoke<string>("connect_google_suite");
+      console.log('[Settings][Google] Connect result:', result)
       setGoogleConnectMessage(result);
       setIsGoogleConnected(true);
     } catch (e: any) {
+      console.error('[Settings][Google] Connect error:', e)
       setGoogleConnectMessage(e?.toString?.() || "Failed to connect Google Suite");
       setIsGoogleConnected(false);
     } finally {
       setIsConnectingGoogle(false);
+      try {
+        const connected = await invoke<boolean>("is_google_connected");
+        console.log('[Settings][Google] Post-connect status:', connected)
+        setIsGoogleConnected(Boolean(connected));
+      } catch (err) {
+        console.error('[Settings][Google] Failed to re-check connection status:', err)
+      }
     }
   };
 
   const handleDisconnectGoogle = async () => {
     try {
+      console.log('[Settings][Google] Starting disconnect flow...')
       setIsConnectingGoogle(true);
       const result = await invoke<string>("disconnect_google_suite");
+      console.log('[Settings][Google] Disconnect result:', result)
       setGoogleConnectMessage(result);
       setIsGoogleConnected(false);
     } catch (e: any) {
+      console.error('[Settings][Google] Disconnect error:', e)
       setGoogleConnectMessage(e?.toString?.() || "Failed to disconnect");
     } finally {
       setIsConnectingGoogle(false);
+      try {
+        const connected = await invoke<boolean>("is_google_connected");
+        console.log('[Settings][Google] Post-disconnect status:', connected)
+        setIsGoogleConnected(Boolean(connected));
+      } catch (err) {
+        console.error('[Settings][Google] Failed to re-check connection status:', err)
+      }
     }
   };
 
@@ -306,6 +331,9 @@ export const Settings = () => {
               value={settings.systemPrompt}
               onChange={(value) => updateSettings({ systemPrompt: value })}
             />
+
+            {/* File Upload Settings */}
+            <FileUploadSettings />
           </div>
 
           <div className="pb-4 flex items-center justify-center">

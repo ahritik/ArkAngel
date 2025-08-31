@@ -3,6 +3,7 @@ mod window;
 mod pii_scrubber;
 mod aws_uploader;
 mod google_oauth;
+mod file_storage;
 
 use std::process::{Command as StdCommand, Stdio, Child};
 use std::sync::Mutex;
@@ -74,6 +75,52 @@ fn trigger_aws_upload() -> Result<String, String> {
   }
 }
 
+// File storage commands
+#[tauri::command]
+async fn upload_file(file_data: Vec<u8>, filename: String) -> Result<file_storage::FileInfo, String> {
+    let storage = file_storage::FileStorage::new()
+        .map_err(|e| format!("Failed to initialize file storage: {}", e))?;
+    
+    storage.upload_file(file_data, filename)
+        .map_err(|e| format!("Failed to upload file: {}", e))
+}
+
+#[tauri::command]
+async fn list_uploaded_files() -> Result<Vec<file_storage::FileInfo>, String> {
+    let storage = file_storage::FileStorage::new()
+        .map_err(|e| format!("Failed to initialize file storage: {}", e))?;
+    
+    storage.list_files()
+        .map_err(|e| format!("Failed to list files: {}", e))
+}
+
+#[tauri::command]
+async fn delete_uploaded_file(file_id: String) -> Result<(), String> {
+    let storage = file_storage::FileStorage::new()
+        .map_err(|e| format!("Failed to initialize file storage: {}", e))?;
+    
+    storage.delete_file(&file_id)
+        .map_err(|e| format!("Failed to delete file: {}", e))
+}
+
+#[tauri::command]
+async fn toggle_file_context(file_id: String) -> Result<file_storage::FileInfo, String> {
+    let storage = file_storage::FileStorage::new()
+        .map_err(|e| format!("Failed to initialize file storage: {}", e))?;
+    
+    storage.toggle_context(&file_id)
+        .map_err(|e| format!("Failed to toggle file context: {}", e))
+}
+
+#[tauri::command]
+async fn get_file_context() -> Result<Vec<String>, String> {
+    let storage = file_storage::FileStorage::new()
+        .map_err(|e| format!("Failed to initialize file storage: {}", e))?;
+    
+    storage.get_context_content()
+        .map_err(|e| format!("Failed to get file context: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -87,7 +134,12 @@ pub fn run() {
             trigger_aws_upload,
             google_oauth::connect_google_suite,
             google_oauth::disconnect_google_suite,
-            google_oauth::is_google_connected
+            google_oauth::is_google_connected,
+            upload_file,
+            list_uploaded_files,
+            delete_uploaded_file,
+            toggle_file_context,
+            get_file_context
         ])
         .setup(|app| {
             // Make a shared place to store the sidecar child
@@ -115,13 +167,34 @@ pub fn run() {
 
             // Always build sidecar to pick up latest changes during dev
             println!("[sidecar] Running npm run build...");
-            let status = StdCommand::new("npm")
+            let npm_cmd = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };
+
+            // Ensure dependencies are installed (idempotent)
+            let install_status = StdCommand::new(npm_cmd)
               .current_dir(&sidecar_cwd)
-              .args(["run", "build"])
+              .args(["ci", "--silent"]) // prefer clean, reproducible install
+              .status()
+              .map_err(|e| format!("Failed to run sidecar install: {}", e))?;
+            if !install_status.success() {
+              eprintln!("[sidecar] npm ci failed; falling back to npm install...");
+              let fallback_install = StdCommand::new(npm_cmd)
+                .current_dir(&sidecar_cwd)
+                .args(["install", "--silent"]) // fallback for environments without lockfile compatibility
+                .status()
+                .map_err(|e| format!("Failed to run sidecar install fallback: {}", e))?;
+              if !fallback_install.success() {
+                return Err("Sidecar dependency installation failed.".into());
+              }
+            }
+
+            // Build the sidecar TypeScript -> JavaScript
+            let build_status = StdCommand::new(npm_cmd)
+              .current_dir(&sidecar_cwd)
+              .args(["run", "build", "--silent"])
               .status()
               .map_err(|e| format!("Failed to run sidecar build: {}", e))?;
-            if !status.success() {
-              return Err("Sidecar build failed. Please run `npm --prefix sidecar i && npm --prefix sidecar run build`.".into());
+            if !build_status.success() {
+              return Err("Sidecar build failed. Try running `npm --prefix sidecar ci && npm --prefix sidecar run build`.".into());
             }
             println!("[sidecar] Build completed.");
 

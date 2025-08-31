@@ -97,6 +97,7 @@ fn bridge_tokens_to_mcp(_app: &tauri::AppHandle, tokens: &GoogleTokens) -> Resul
   } else { None }
   .or_else(|| get_user_email_from_api(&tokens.access_token))
   .unwrap_or_else(|| "default@example.com".to_string());
+  println!("[OAuth][Bridge] Derived user email: {}", user_email);
 
   // Compute expiry as ISO8601 naive string (YYYY-MM-DDTHH:MM:SS[.ffffff])
   let expiry_iso: Option<String> = if let Some(expires_in) = tokens.expires_in {
@@ -138,6 +139,7 @@ fn bridge_tokens_to_mcp(_app: &tauri::AppHandle, tokens: &GoogleTokens) -> Resul
   let user_path = base_dir.join(format!("{}.json", user_email));
   let json_str = serde_json::to_string_pretty(&store_credentials)?;
   fs::write(&user_path, json_str)?;
+  println!("[OAuth][Bridge] Wrote MCP credentials to {:?}", user_path);
 
   // Maintain existing legacy MCP outputs for Calendar/Gmail
   let home_dir = dirs::home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
@@ -158,6 +160,7 @@ fn bridge_tokens_to_mcp(_app: &tauri::AppHandle, tokens: &GoogleTokens) -> Resul
   let legacy_json = serde_json::to_string_pretty(&legacy)?;
   fs::write(&calendar_creds_path, &legacy_json)?;
   fs::write(&gmail_creds_path, &legacy_json)?;
+  println!("[OAuth][Bridge] Wrote legacy credentials: {:?}, {:?}", calendar_creds_path, gmail_creds_path);
 
   if let Ok(client_id) = std::env::var("GOOGLE_CLIENT_ID") {
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
@@ -175,6 +178,7 @@ fn bridge_tokens_to_mcp(_app: &tauri::AppHandle, tokens: &GoogleTokens) -> Resul
     let oauth_json = serde_json::to_string_pretty(&oauth_config)?;
     fs::write(&calendar_oauth_path, &oauth_json)?;
     fs::write(&gmail_oauth_path, &oauth_json)?;
+    println!("[OAuth][Bridge] Wrote legacy oauth keys: {:?}, {:?}", calendar_oauth_path, gmail_oauth_path);
   }
 
   Ok(())
@@ -192,27 +196,47 @@ fn open_in_browser(url: &str) -> Result<()> {
 pub fn is_google_connected(app: tauri::AppHandle) -> Result<bool, String> {
   let path = match tokens_path(&app) {
     Ok(p) => p,
-    Err(_) => return Ok(false),
+    Err(e) => {
+      eprintln!("[OAuth][Status] Failed to resolve tokens path: {}", e);
+      return Ok(false);
+    },
   };
-  Ok(path.exists())
+  let exists = path.exists();
+  println!("[OAuth][Status] Tokens path: {:?}, exists: {}", path, exists);
+  Ok(exists)
 }
 
 #[tauri::command]
 pub fn disconnect_google_suite(app: tauri::AppHandle) -> Result<String, String> {
+  println!("[OAuth][Disconnect] Starting disconnect flow...");
   // Attempt token revoke (best-effort)
   let path = tokens_path(&app).map_err(|e| e.to_string())?;
   if path.exists() {
+    println!("[OAuth][Disconnect] Found tokens at {:?}. Attempting revoke...", path);
     if let Ok(content) = fs::read_to_string(&path) {
       if let Ok(tokens) = serde_json::from_str::<GoogleTokens>(&content) {
+        let has_refresh = tokens.refresh_token.is_some();
+        println!("[OAuth][Disconnect] Using {} token for revoke", if has_refresh {"refresh"} else {"access"});
         let revoke_token = tokens.refresh_token.as_deref().unwrap_or(&tokens.access_token);
         let client = reqwest::blocking::Client::new();
-        let _ = client
+        let resp = client
           .post("https://oauth2.googleapis.com/revoke")
           .form(&[("token", revoke_token)])
           .send();
+        match resp {
+          Ok(r) => println!("[OAuth][Disconnect] Revoke status: {}", r.status()),
+          Err(e) => eprintln!("[OAuth][Disconnect] Revoke request failed: {}", e),
+        }
+      } else {
+        eprintln!("[OAuth][Disconnect] Failed to parse tokens.json");
       }
+    } else {
+      eprintln!("[OAuth][Disconnect] Failed to read tokens.json");
     }
     let _ = fs::remove_file(&path);
+    println!("[OAuth][Disconnect] Removed tokens file: {:?}", path);
+  } else {
+    println!("[OAuth][Disconnect] No tokens file found at {:?}", path);
   }
 
   // Remove MCP credential store files
@@ -224,6 +248,7 @@ pub fn disconnect_google_suite(app: tauri::AppHandle) -> Result<String, String> 
     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
       .join(".credentials")
   };
+  println!("[OAuth][Disconnect] Cleaning MCP credentials in {:?}", base_dir);
   if let Ok(entries) = fs::read_dir(&base_dir) {
     for entry in entries.flatten() {
       if entry.path().extension().and_then(|s| s.to_str()) == Some("json") {
@@ -236,13 +261,50 @@ pub fn disconnect_google_suite(app: tauri::AppHandle) -> Result<String, String> 
 
 #[tauri::command]
 pub fn connect_google_suite(app: tauri::AppHandle) -> Result<String, String> {
-  // Load .env (safe to call multiple times; no-op if already loaded)
+  println!("[OAuth][Connect] Starting connect flow...");
+  // Load .env from current dir, then try explicit src-tauri paths
   let _ = dotenvy::dotenv();
+  {
+    use std::path::PathBuf;
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let env_candidates = [
+      manifest_dir.join(".env"),
+      manifest_dir.join("../.env"),
+      manifest_dir.join("../src-tauri/.env"),
+    ];
+    for path in env_candidates.iter() {
+      if path.exists() {
+        if dotenvy::from_path(path).is_ok() {
+          println!("[OAuth][Connect] Loaded env from {:?}", path);
+        }
+      }
+    }
+  }
 
-  // Read secrets from env
-  let client_id = load_env("GOOGLE_CLIENT_ID").map_err(|e| e.to_string())?;
-  // Prefer PKCE flow (no need for client secret), but allow secret if present
+  // Read secrets from env with explicit debug
+  let client_id = match load_env("GOOGLE_CLIENT_ID") {
+    Ok(v) => {
+      println!("[OAuth][Connect] Loaded GOOGLE_CLIENT_ID (len: {})", v.len());
+      v
+    }
+    Err(e) => {
+      eprintln!("[OAuth][Connect] Missing GOOGLE_CLIENT_ID: {}", e);
+      return Err(e.to_string());
+    }
+  };
+  
+  // Check for client secret with explicit debug
   let client_secret = std::env::var("GOOGLE_CLIENT_SECRET").ok();
+  println!("[OAuth][Connect] Environment check - GOOGLE_CLIENT_SECRET: {}", 
+    if client_secret.is_some() { "present" } else { "missing" });
+  if let Some(ref s) = client_secret { 
+    println!("[OAuth][Connect] GOOGLE_CLIENT_SECRET loaded (len: {})", s.len()); 
+  }
+  
+  let oauth_flow = std::env::var("GOOGLE_OAUTH_FLOW").unwrap_or_else(|_| "auto".to_string()).to_lowercase();
+  let is_web_flow = oauth_flow == "web" || (oauth_flow == "auto" && client_secret.is_some());
+  println!("[OAuth][Connect] Flow decision: oauth_flow={}, has_secret={}, using={}", 
+    oauth_flow, client_secret.is_some(), if is_web_flow { "web" } else { "desktop (PKCE)" });
 
   // Scopes for Google services (broad access for MCP tools)
   let scopes = vec![
@@ -288,38 +350,82 @@ pub fn connect_google_suite(app: tauri::AppHandle) -> Result<String, String> {
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
   ].join(" ");
+  println!("[OAuth][Connect] Total scopes length: {}", scopes.len());
 
-  // Start ephemeral local server for OAuth redirect
-  let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-  listener
-    .set_nonblocking(false)
-    .map_err(|e| e.to_string())?;
-  let redirect_port = listener.local_addr().map_err(|e| e.to_string())?.port();
-  let redirect_uri = format!("http://127.0.0.1:{}", redirect_port);
+  // Helper to parse a port number from a URL string like http://localhost:3000/path
+  let parse_port = |uri: &str| -> Option<u16> {
+    let after_scheme = uri.split("://").nth(1)?; // localhost:3000/path
+    let host_port = after_scheme.split('/').next()?; // localhost:3000
+    host_port.split(':').nth(1)?.parse::<u16>().ok()
+  };
+
+  // Start local server for OAuth redirect
+  let (listener, redirect_uri) = if is_web_flow {
+    let ru = std::env::var("GOOGLE_REDIRECT_URI")
+      .unwrap_or_else(|_| "http://localhost:3000/oauth2callback".to_string());
+    let port = parse_port(&ru).unwrap_or(3000);
+    let l = TcpListener::bind(format!("127.0.0.1:{}", port)).map_err(|e| {
+      eprintln!("[OAuth][Connect] Failed to bind configured redirect port {}: {}", port, e);
+      e.to_string()
+    })?;
+    println!("[OAuth][Connect] Redirect URI (web flow): {}", ru);
+    (l, ru)
+  } else {
+    let l = TcpListener::bind("127.0.0.1:0").map_err(|e| {
+      eprintln!("[OAuth][Connect] Failed to bind local port: {}", e);
+      e.to_string()
+    })?;
+    l.set_nonblocking(false).map_err(|e| {
+      eprintln!("[OAuth][Connect] Failed to set blocking mode: {}", e);
+      e.to_string()
+    })?;
+    let port = l.local_addr().map_err(|e| {
+      eprintln!("[OAuth][Connect] Failed to read local addr: {}", e);
+      e.to_string()
+    })?.port();
+    let ru = format!("http://127.0.0.1:{}", port);
+    println!("[OAuth][Connect] Redirect URI (desktop flow): {}", ru);
+    (l, ru)
+  };
 
   let (code_verifier, code_challenge) = generate_pkce_pair();
+  println!("[OAuth][Connect] Generated PKCE pair (verifier: {} chars)", code_verifier.len());
 
   // Build authorization URL (use v2 endpoint)
   let auth_url = format!(
     "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scopes}&access_type=offline&prompt=consent&code_challenge={code_challenge}&code_challenge_method=S256",
   );
+  println!("[OAuth][Connect] Opening browser for consent page...");
 
-  open_in_browser(&auth_url).map_err(|e| e.to_string())?;
+  open_in_browser(&auth_url).map_err(|e| {
+    eprintln!("[OAuth][Connect] Failed to open browser: {}", e);
+    e.to_string()
+  })?;
 
   // Accept single connection for redirect
-  // Simple HTTP parsing sufficient for this loopback
+  println!("[OAuth][Connect] Waiting for OAuth redirect on {}...", redirect_uri);
   listener
     .set_nonblocking(false)
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| {
+      eprintln!("[OAuth][Connect] Failed to set blocking mode (second time): {}", e);
+      e.to_string()
+    })?;
 
-  let (mut stream, _) = listener.accept().map_err(|e| e.to_string())?;
+  let (mut stream, _) = listener.accept().map_err(|e| {
+    eprintln!("[OAuth][Connect] Failed to accept redirect: {}", e);
+    e.to_string()
+  })?;
   stream
     .set_read_timeout(Some(Duration::from_secs(120)))
     .ok();
 
   let mut buffer = [0; 8192];
-  let n = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+  let n = stream.read(&mut buffer).map_err(|e| {
+    eprintln!("[OAuth][Connect] Failed reading redirect request: {}", e);
+    e.to_string()
+  })?;
   let req = String::from_utf8_lossy(&buffer[..n]);
+  if let Some(first_line) = req.lines().next() { println!("[OAuth][Connect] Redirect first line: {}", first_line); }
 
   // Parse the first line: GET /?code=... HTTP/1.1
   let first_line = req.lines().next().unwrap_or("");
@@ -340,9 +446,13 @@ pub fn connect_google_suite(app: tauri::AppHandle) -> Result<String, String> {
     });
 
   let code = match code_opt {
-    Some(c) => c,
+    Some(c) => {
+      println!("[OAuth][Connect] Received authorization code (len: {})", c.len());
+      c
+    },
     None => {
       let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n\r\nBad Request");
+      eprintln!("[OAuth][Connect] Authorization code not found in redirect");
       return Err("Authorization code not found in redirect".into());
     }
   };
@@ -353,6 +463,7 @@ pub fn connect_google_suite(app: tauri::AppHandle) -> Result<String, String> {
   // Exchange code for tokens
   let token_endpoint = "https://oauth2.googleapis.com/token";
   let client = reqwest::blocking::Client::new();
+  println!("[OAuth][Connect] Exchanging code for tokens...");
 
   let mut form = vec![
     ("code", code.as_str()),
@@ -361,18 +472,34 @@ pub fn connect_google_suite(app: tauri::AppHandle) -> Result<String, String> {
     ("grant_type", "authorization_code"),
     ("code_verifier", code_verifier.as_str()),
   ];
-  if let Some(ref secret) = client_secret {
-    form.push(("client_secret", secret.as_str()));
+  if is_web_flow {
+    if let Some(ref secret) = client_secret {
+      form.push(("client_secret", secret.as_str()));
+    }
   }
 
-  let resp = client
+  let resp = match client
     .post(token_endpoint)
     .form(&form)
     .send()
-    .map_err(|e| e.to_string())?;
+  {
+    Ok(r) => {
+      println!("[OAuth][Connect] Token endpoint status: {}", r.status());
+      r
+    },
+    Err(e) => {
+      eprintln!("[OAuth][Connect] Token request failed: {}", e);
+      return Err(e.to_string());
+    }
+  };
 
   if !resp.status().is_success() {
     let text = resp.text().unwrap_or_default();
+    eprintln!("[OAuth][Connect] Token exchange failed: {}", text);
+    // Provide actionable guidance for common error
+    if text.contains("client_secret is missing") && !is_web_flow {
+      return Err("Token exchange failed: client_secret is missing. Your Google OAuth client likely requires a client secret (Web application). Either set GOOGLE_CLIENT_SECRET and (optionally) GOOGLE_REDIRECT_URI, or switch to a Desktop App OAuth client and set GOOGLE_OAUTH_FLOW=desktop with its client ID.".into());
+    }
     return Err(format!("Token exchange failed: {}", text));
   }
 
@@ -386,7 +513,10 @@ pub fn connect_google_suite(app: tauri::AppHandle) -> Result<String, String> {
     id_token: Option<String>,
   }
 
-  let token_resp: TokenResp = resp.json().map_err(|e| e.to_string())?;
+  let token_resp: TokenResp = resp.json().map_err(|e| {
+    eprintln!("[OAuth][Connect] Failed parsing token JSON: {}", e);
+    e.to_string()
+  })?;
 
   let tokens = GoogleTokens {
     access_token: token_resp.access_token,
@@ -400,8 +530,18 @@ pub fn connect_google_suite(app: tauri::AppHandle) -> Result<String, String> {
       .map_err(|e| e.to_string())?
       .as_millis(),
   };
+  println!(
+    "[OAuth][Connect] Tokens received (access: {} chars, has_refresh: {}, has_id: {})",
+    tokens.access_token.len(),
+    tokens.refresh_token.is_some(),
+    tokens.id_token.is_some()
+  );
 
-  save_tokens(&app, &tokens).map_err(|e| e.to_string())?;
+  save_tokens(&app, &tokens).map_err(|e| {
+    eprintln!("[OAuth][Connect] Failed to save/bridge tokens: {}", e);
+    e.to_string()
+  })?;
+  println!("[OAuth][Connect] Tokens saved and bridged to MCP stores");
 
   Ok("Google Suite connected successfully".to_string())
 } 
