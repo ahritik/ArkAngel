@@ -91,15 +91,121 @@ function readScopesForEmail(email: string): string[] {
   }
 }
 
-function isPdfQuestion(message: string): boolean {
-  const lowerMessage = message.toLowerCase()
-  const pdfKeywords = [
-    'pdf', 'document', 'file', 'what\'s in', 'content',
-    'extract', 'read', 'analyze', 'on page', 'section',
-    'in the document', 'from the file'
-  ]
-  
-  return pdfKeywords.some(keyword => lowerMessage.includes(keyword))
+// ---------------- Conversation memory & background summarization ----------------
+
+type Role = 'user' | 'assistant'
+
+type ConversationTurn = {
+  role: Role
+  content: string
+  timestamp: string
+}
+
+type ConversationState = {
+  turns: ConversationTurn[]
+  summary: string
+  summarizing: boolean
+  lastSummaryAt?: number
+}
+
+const conversations = new Map<string, ConversationState>()
+
+function resolveChatId(req: any): string {
+  const header = req.header?.('x-chat-id')
+  const { chatId, conversationId } = (req.body || {}) as { chatId?: string; conversationId?: string }
+  return String(header || chatId || conversationId || 'default')
+}
+
+function getConversationState(chatId: string): ConversationState {
+  let state = conversations.get(chatId)
+  if (!state) {
+    state = { turns: [], summary: '', summarizing: false, lastSummaryAt: undefined }
+    conversations.set(chatId, state)
+  }
+  return state
+}
+
+function addTurn(chatId: string, role: Role, content: string) {
+  const state = getConversationState(chatId)
+  state.turns.push({ role, content, timestamp: new Date().toISOString() })
+}
+
+function formatTurn(turn: ConversationTurn): string {
+  const who = turn.role === 'user' ? 'User' : 'Assistant'
+  return `${who}: ${turn.content}`
+}
+
+function buildConversationContext(state: ConversationState, maxRecent: number = 6): string {
+  const turns = state.turns
+  if (!turns.length && !state.summary) return ''
+
+  const recent = turns.slice(Math.max(0, turns.length - maxRecent))
+  const olderCount = Math.max(0, turns.length - recent.length)
+
+  const blocks: string[] = []
+  if (state.summary) {
+    blocks.push(`Conversation Summary (compressed from ${olderCount} earlier message${olderCount === 1 ? '' : 's'}):\n${state.summary}`)
+  }
+  if (recent.length) {
+    blocks.push(`Recent Messages (up to last ${maxRecent}):\n${recent.map(formatTurn).join('\n')}`)
+  }
+  return blocks.join('\n\n')
+}
+
+async function maybeSummarizeAsync(chatId: string, apiKey: string | undefined, model: string | undefined) {
+  const state = getConversationState(chatId)
+  const maxRecent = 6
+  const olderTurns = state.turns.slice(0, Math.max(0, state.turns.length - maxRecent))
+
+  // Nothing to summarize or already running
+  if (olderTurns.length === 0 || state.summarizing) return
+
+  // Mark as running
+  state.summarizing = true
+
+  // Prefer a small, cheap model for summarization if none provided
+  const summaryModel = model || 'gpt-4o-mini'
+
+  try {
+    const llm = new ChatOpenAI({ model: summaryModel, temperature: 0.2, apiKey })
+
+    const existing = state.summary || 'None'
+    const olderText = olderTurns.map(formatTurn).join('\n')
+
+    const prompt = [
+      'You maintain a running, concise summary of a chat between a user and an AI assistant.',
+      'Update the summary with the following earlier messages so that only the key facts, decisions, tasks, entities, and user preferences remain.',
+      'Keep it objective, 180-250 words, no salutations or meta commentary.',
+      '',
+      `Existing summary:\n${existing}`,
+      '',
+      'Earlier messages to compress:',
+      olderText,
+      '',
+      'Return only the updated summary.'
+    ].join('\n')
+
+    const aiMsg: any = await llm.invoke(prompt as any)
+    let summaryText = ''
+    if (typeof aiMsg?.content === 'string') {
+      summaryText = aiMsg.content
+    } else if (Array.isArray(aiMsg?.content)) {
+      summaryText = aiMsg.content.map((c: any) => (typeof c === 'string' ? c : c?.text ?? '')).join('')
+    } else if (aiMsg?.text) {
+      summaryText = aiMsg.text
+    }
+
+    // Update state: set new summary, keep only the last maxRecent turns
+    state.summary = summaryText?.trim() || state.summary
+    const recent = state.turns.slice(Math.max(0, state.turns.length - maxRecent))
+    state.turns = recent
+    state.lastSummaryAt = Date.now()
+  } catch (err) {
+    console.error('[sidecar] Background summary error:', err)
+  } finally {
+    const s = getConversationState(chatId)
+    s.summarizing = false
+  }
 }
 
 function enhanceSystemPromptWithDateTime(systemPrompt?: string): string {
@@ -128,12 +234,21 @@ function enhanceSystemPromptWithDateTime(systemPrompt?: string): string {
 
 IMPORTANT: When working with calendar events, scheduling, or time-sensitive tasks, always consider this current date/time context. The user's computer timezone is ${Intl.DateTimeFormat().resolvedOptions().timeZone}, but calendar events may be in different timezones.
 
+CONVERSATION & CONTEXT POLICY:
+- This is a multi-turn conversation. You may receive a Conversation Context section (Summary + Recent Messages).
+- The Recent Messages section has priority over the Summary if there is any conflict.
+- Always answer the most recent User message first. Use prior context to inform and maintain continuity.
+- When the user says "that", "those", "it", "the above", "continue", or similar, resolve references from the latest tool results or messages in Recent Messages. Reuse already-presented data (e.g., calendar events, emails) instead of re-fetching unless explicitly asked.
+- Preserve entities, constraints, decisions, and user preferences across turns.
+- If context is ambiguous, ask one concise clarifying question while offering your best interpretation.
+- Prefer concise summaries over re-listing long content unless the user asks to see the full list again.
+
 ${systemPrompt || 'You are a helpful AI assistant with access to calendar, email, and other productivity tools.'}`
 
   return dateTimeInfo.trim()
 }
 
-function createAgent(opts: { providerId?: string; model?: string; apiKey?: string; systemPrompt?: string, disableMCP?: boolean }) {
+function createAgent(opts: { providerId?: string; model?: string; apiKey?: string; systemPrompt?: string }) {
   const provider = (opts.providerId || 'openai').toLowerCase()
   const model = opts.model || 'gpt-4o-mini'
   const apiKey = opts.apiKey || process.env.OPENAI_API_KEY
@@ -146,19 +261,50 @@ function createAgent(opts: { providerId?: string; model?: string; apiKey?: strin
   }
   const llm = new ChatOpenAI({ model, temperature: 0.5, streaming: true, apiKey })
   
-  if (opts.disableMCP) {
-    // For PDF questions, return just the LLM (no MCP agent at all)
-    return { llm, systemPrompt: opts.systemPrompt, isPDFMode: true }
-  } else {
-    // For action questions, use MCP agent with tools
-    const agent = new MCPAgent({ 
-      llm: llm as any, 
-      client, 
-      maxSteps: 20,
-      disallowedTools: ["shell", "file_system", "network"] // Block risky tools, keep calendar/gmail
-    })
-    return { agent, systemPrompt: opts.systemPrompt, isPDFMode: false }
+  // Add a single local file tool to fetch content by id
+  const uploadsDir = path.resolve(process.cwd(), '..', 'uploads')
+  const indexPath = path.join(uploadsDir, 'index.json')
+  function readIndex(): any[] {
+    try {
+      if (!fs.existsSync(indexPath)) return []
+      const raw = fs.readFileSync(indexPath, 'utf-8')
+      return JSON.parse(raw) || []
+    } catch {
+      return []
+    }
   }
+
+  const localTools: any[] = [
+    {
+      name: 'arkangel_read_file',
+      description: 'Read extracted text content of an uploaded file by id. Use only when needed.',
+      input_schema: {
+        type: 'object',
+        properties: { fileId: { type: 'string' }, offset: { type: 'number', default: 0 }, limit: { type: 'number', default: 5000 } },
+        required: ['fileId']
+      },
+      handler: async ({ fileId, offset = 0, limit = 5000 }: any) => {
+        const files = readIndex()
+        const f = files.find((x: any) => x?.id === fileId)
+        if (!f) return `Error: file not found: ${fileId}`
+        const content = String(f.content || '')
+        const start = Math.max(0, Number(offset) || 0)
+        const len = Math.max(1, Math.min(Number(limit) || 5000, 100_000))
+        const slice = content.slice(start, start + len)
+        console.log(`[sidecar] arkangel_read_file: id=${fileId} offset=${start} length=${slice.length}`)
+        return `File: ${f.name} (${f.file_type}, ${f.size} bytes)\nOffset: ${start}, Length: ${slice.length}\n\n${slice}`
+      }
+    }
+  ]
+
+  const agent = new MCPAgent({
+    llm: llm as any,
+    client,
+    maxSteps: 20,
+    disallowedTools: ["shell", "file_system", "network"],
+    tools: localTools as any
+  } as any)
+  return { agent, systemPrompt: opts.systemPrompt }
 }
 
 class StreamingMCPAgent {
@@ -312,7 +458,7 @@ class StreamingMCPAgent {
 // Streaming chat endpoint
 app.post('/api/chat/stream', async (req, res) => {
   try {
-    const { message, apiKey, model, providerId, systemPrompt, fileContext } = req.body || {}
+    const { message, apiKey, model, providerId, systemPrompt, fileSummaries } = req.body || {}
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' })
@@ -323,6 +469,9 @@ app.post('/api/chat/stream', async (req, res) => {
     const effectiveKey = apiKey || headerKey || process.env.OPENAI_API_KEY
     const masked = effectiveKey ? `${String(effectiveKey).slice(0, 3)}***` : 'none'
     console.log('[sidecar] Using API key:', masked)
+
+    const chatId = resolveChatId(req)
+    const state = getConversationState(chatId)
 
     console.log('[sidecar] Processing streaming message:', stringifyPreview(message))
 
@@ -339,73 +488,45 @@ app.post('/api/chat/stream', async (req, res) => {
 
     res.write(`data: ${JSON.stringify({ type: 'start' })}\n\n`)
 
-          try {
-        // Detect if this is a PDF question and disable MCP tools accordingly
-        const disableMCP = isPdfQuestion(message)
-        console.log(`[sidecar] Question type: ${disableMCP ? 'PDF/Document (LLM only)' : 'Action/Tool (MCP enabled)'}`)
-        
-        const result = createAgent({ 
-          apiKey: effectiveKey, 
-          model, 
-          providerId, 
-          systemPrompt,
-          disableMCP 
-        })
-        
-                if (result.isPDFMode) {
-          // PDF mode: Use LLM streaming with file context
-          const { llm, systemPrompt: derivedSystemPrompt } = result
-          
-          // Add file context if available
-          let enhancedSystemPrompt = enhanceSystemPromptWithDateTime(derivedSystemPrompt)
-          if (fileContext && fileContext.length > 0) {
-            const fileContent = fileContext.join('\n\n---\n\n');
-            enhancedSystemPrompt = `${enhancedSystemPrompt}\n\nFile Context:\n\n${fileContent}`;
-          }
-          
-          // Send response start event
-          res.write(`data: ${JSON.stringify({ type: 'response_start', content: 'Response:' })}\n\n`)
-          
-          // Use LLM streaming (word by word)
-          const stream = await llm.stream([
-            { role: "system", content: enhancedSystemPrompt },
-            { role: "user", content: message }
-          ])
-          
-          // Process each token and send as streaming events
-          for await (const chunk of stream) {
-            if (chunk.content) {
-              res.write(`data: ${JSON.stringify({ type: 'token', content: chunk.content })}\n\n`)
-            }
-          }
-          
-          // Send completion event
-          res.write(`data: ${JSON.stringify({ type: 'complete', timestamp: new Date().toISOString() })}\n\n`)
-          
-        } else {
-           // Action mode: Use MCP agent with streaming
-           const { agent, systemPrompt: derivedSystemPrompt } = result
-           const streamingAgent = new StreamingMCPAgent(agent, (event) => {
-             res.write(`data: ${JSON.stringify(event)}\n\n`)
-           })
-           
-           // Use systemPrompt if provided, otherwise just the message
-           let enhancedSystemPrompt = enhanceSystemPromptWithDateTime(derivedSystemPrompt)
-           
-           // Add file context if available
-           if (fileContext && fileContext.length > 0) {
-             const fileContent = fileContext.join('\n\n---\n\n');
-             enhancedSystemPrompt = `${enhancedSystemPrompt}\n\nFile Context:\n\n${fileContent}`;
-           }
-           
-           const finalMessage = `${enhancedSystemPrompt}\n\n${message}`
-           await streamingAgent.run(finalMessage)
-         }
+    try {
+      console.log('[sidecar] MCP always enabled for all requests')
+      
+      const { agent, systemPrompt: derivedSystemPrompt } = createAgent({ 
+        apiKey: effectiveKey, 
+        model, 
+        providerId, 
+        systemPrompt 
+      })
+      
+      // Build conversation context BEFORE adding the new user turn to avoid duplication
+      const conversationContext = buildConversationContext(state, 6)
 
-      res.write(`data: ${JSON.stringify({ 
-        type: 'complete', 
-        timestamp: new Date().toISOString()
-      })}\n\n`)
+      // Use MCP agent with streaming for all requests
+      const streamingAgent = new StreamingMCPAgent(agent, (event) => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`)
+      })
+      
+      // Add summaries if available and conversation context
+      let enhancedSystemPrompt = enhanceSystemPromptWithDateTime(derivedSystemPrompt)
+      if (conversationContext) {
+        enhancedSystemPrompt = `${enhancedSystemPrompt}\n\nConversation Context:\n\n${conversationContext}`
+      }
+      if (Array.isArray(fileSummaries) && fileSummaries.length > 0) {
+        const joined = String(fileSummaries.join('\n- '))
+        console.log('[sidecar] File summaries included in prompt:\n- ' + joined)
+        enhancedSystemPrompt = `${enhancedSystemPrompt}\n\nUploaded Files (summaries only):\n- ${joined}`
+      }
+      
+      // Record the new user turn and kick off background summarization (non-blocking)
+      addTurn(chatId, 'user', String(message))
+      // Fire-and-forget summary update so it does not slow the main generation
+      void maybeSummarizeAsync(chatId, effectiveKey, model)
+      
+      const finalMessage = `${enhancedSystemPrompt}\n\n${message}`
+      const responseText = await streamingAgent.run(finalMessage)
+
+      // Persist assistant response
+      addTurn(chatId, 'assistant', responseText)
 
       res.write(`data: ${JSON.stringify({ 
         type: 'complete', 
@@ -437,7 +558,7 @@ app.post('/api/chat/stream', async (req, res) => {
 // Non-streaming chat endpoint (fallback)
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, apiKey, model, providerId, systemPrompt, fileContext } = req.body || {}
+    const { message, apiKey, model, providerId, systemPrompt, fileSummaries } = req.body || {}
 
     if (!message) {
       return res.status(400).json({ error: 'Message is required' })
@@ -448,12 +569,35 @@ app.post('/api/chat', async (req, res) => {
     const masked = effectiveKey ? `${String(effectiveKey).slice(0, 3)}***` : 'none'
     console.log('[sidecar] Using API key:', masked)
 
+    const chatId = resolveChatId(req)
+    const state = getConversationState(chatId)
+
     console.log('[sidecar] Processing message:', stringifyPreview(message))
 
     const { agent, systemPrompt: derivedSystemPrompt } = createAgent({ apiKey: effectiveKey, model, providerId, systemPrompt })
-    const enhancedSystemPrompt = enhanceSystemPromptWithDateTime(derivedSystemPrompt)
+    
+    // Build conversation context BEFORE adding the new user turn to avoid duplication
+    const conversationContext = buildConversationContext(state, 6)
+
+    // Add summaries if available and conversation context
+    let enhancedSystemPrompt = enhanceSystemPromptWithDateTime(derivedSystemPrompt)
+    if (conversationContext) {
+      enhancedSystemPrompt = `${enhancedSystemPrompt}\n\nConversation Context:\n\n${conversationContext}`
+    }
+    if (Array.isArray(fileSummaries) && fileSummaries.length > 0) {
+      const joined = String(fileSummaries.join('\n- '))
+      enhancedSystemPrompt = `${enhancedSystemPrompt}\n\nUploaded Files (summaries only):\n- ${joined}\n\nYou have tools: arkangel_list_files, arkangel_read_file. Use them to inspect files on demand instead of relying on summaries.`
+    }
+    
+    // Record user turn and kick off background summarization (non-blocking)
+    addTurn(chatId, 'user', String(message))
+    void maybeSummarizeAsync(chatId, effectiveKey, model)
+    
     const finalMessage = `${enhancedSystemPrompt}\n\n${message}`
     const result = await agent.run(finalMessage)
+
+    // Persist assistant response
+    addTurn(chatId, 'assistant', String(result))
 
     res.json({ 
       success: true, 
@@ -482,7 +626,7 @@ app.get('/api/tools', async (_req, res) => {
   try {
     res.json({ 
       tools: [
-        { name: 'playwright', description: 'Web automation and testing tools' }
+        { name: 'arkangel_read_file', description: 'Read extracted text content of an uploaded file by id' }
       ]
     })
   } catch (error) {

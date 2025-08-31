@@ -102,13 +102,21 @@ export const useCompletion = () => {
       try {
         let fullResponse = "";
 
-        // Fetch file context if available
-        let fileContext: string[] | undefined = undefined;
+        // Gather brief summaries of enabled files (not full content)
+        let fileSummaries: string[] | undefined = undefined;
         try {
           const { invoke } = await import('@tauri-apps/api/core');
-          fileContext = await invoke<string[]>('get_file_context');
+          const files = await invoke<any[]>('list_uploaded_files');
+          fileSummaries = (files || [])
+            .filter((f) => f?.is_context_enabled)
+            .map((f) => {
+              const s = (f?.summary && String(f.summary).trim().length > 0)
+                ? String(f.summary)
+                : `File ${f?.name || f?.id}: ${String(f?.content || '').slice(0, 200)}...`;
+              return s;
+            });
         } catch (error) {
-          console.warn("Failed to fetch file context:", error);
+          console.warn("Failed to load file summaries:", error);
         }
 
         const url = "http://127.0.0.1:8765/api/chat/stream";
@@ -122,7 +130,8 @@ export const useCompletion = () => {
             apiKey: getSettings()?.openAiApiKey || getSettings()?.apiKey || undefined,
             model: getSettings()?.selectedModel || getSettings()?.customModel || "gpt-4o-mini",
             providerId: getSettings()?.selectedProvider || "openai",
-            fileContext: fileContext, // Pass file context to sidecar
+            fileSummaries,
+            // Note: files are summarized up-front and included in the system prompt.
           }),
           signal: abortControllerRef.current.signal,
         });

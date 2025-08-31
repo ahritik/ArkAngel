@@ -165,6 +165,13 @@ pub fn run() {
               sidecar_cwd, script_path
             );
 
+            // If port already in use, skip building/spawning the sidecar
+            let port_in_use = std::net::TcpStream::connect(("127.0.0.1", 8765)).is_ok();
+            if port_in_use {
+              println!("[sidecar] Port 8765 already in use; skipping sidecar spawn.");
+              return Ok(());
+            }
+
             // Always build sidecar to pick up latest changes during dev
             println!("[sidecar] Running npm run build...");
             let npm_cmd = if cfg!(target_os = "windows") { "npm.cmd" } else { "npm" };

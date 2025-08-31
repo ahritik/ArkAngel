@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Upload, File, Trash2 } from "lucide-react";
+import { Upload, File, Trash2, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 
 interface FileInfo {
@@ -11,6 +11,7 @@ interface FileInfo {
   upload_date: string;
   content: string;
   is_context_enabled: boolean;
+  summary?: string;
 }
 
 export const FileUploadSettings = () => {
@@ -107,9 +108,9 @@ export const FileUploadSettings = () => {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Header Section */}
-      <div className="space-y-2">
+      <div className="space-y-1">
         <h4 className="text-sm font-medium">File Uploads</h4>
         <p className="text-xs text-muted-foreground">
           Upload files to provide context for AI conversations
@@ -123,28 +124,39 @@ export const FileUploadSettings = () => {
         className="w-full"
         variant="outline"
       >
-        <Upload className="h-4 w-4 mr-2" />
-        {isUploading ? 'Uploading...' : 'Upload Files'}
+        {isUploading ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            Uploading file… You can leave this page safely.
+          </>
+        ) : (
+          <>
+            <Upload className="h-4 w-4 mr-2" />
+            Upload Files
+          </>
+        )}
       </Button>
-      
-      {/* File List */}
+
+      {/* File List (collapsible, no inner scroll) */}
       {uploadedFiles.length > 0 && (
-        <div className="space-y-2">
-          <h5 className="text-xs font-medium text-muted-foreground">Uploaded Files</h5>
-          <div className="space-y-2 max-h-48 overflow-y-auto">
+        <details className="w-full">
+          <summary className="text-xs font-medium text-muted-foreground cursor-pointer select-none">
+            Uploaded Files ({uploadedFiles.length})
+          </summary>
+          <div className="space-y-1 mt-2">
             {uploadedFiles.map((file) => (
-              <div key={file.id} className="flex items-center justify-between p-2 border rounded-lg text-xs">
-                <div className="flex items-center space-x-2 flex-1 min-w-0">
-                  <File className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+              <div key={file.id} className="flex items-start justify-between p-2 border rounded-lg text-xs">
+                <div className="flex items-start space-x-2 flex-1 min-w-0">
+                  <File className="h-3 w-3 text-muted-foreground flex-shrink-0 mt-0.5" />
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">{file.name}</p>
-                    <p className="text-muted-foreground">
+                    <p className="font-medium truncate leading-tight">{file.name}</p>
+                    <p className="text-[10px] text-muted-foreground leading-tight">
                       {formatFileSize(file.size)} • {formatDate(file.upload_date)}
                     </p>
                   </div>
                 </div>
                 
-                <div className="flex items-center space-x-2 flex-shrink-0">
+                <div className="flex items-center space-x-1 flex-shrink-0 ml-2">
                   <input
                     type="checkbox"
                     checked={file.is_context_enabled}
@@ -156,7 +168,7 @@ export const FileUploadSettings = () => {
                     variant="ghost"
                     size="sm"
                     onClick={() => handleDeleteFile(file.id)}
-                    className="h-6 w-6 p-0 text-destructive hover:text-destructive"
+                    className="h-5 w-5 p-0 text-destructive hover:text-destructive"
                     title="Delete file"
                   >
                     <Trash2 className="h-3 w-3" />
@@ -165,7 +177,7 @@ export const FileUploadSettings = () => {
               </div>
             ))}
           </div>
-        </div>
+        </details>
       )}
     </div>
   );

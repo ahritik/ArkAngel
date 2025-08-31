@@ -14,6 +14,8 @@ pub struct FileInfo {
     pub upload_date: String,           // ISO 8601 timestamp
     pub content: String,               // Extracted text content
     pub is_context_enabled: bool,      // Toggle for LLM context
+    #[serde(default)]
+    pub summary: String,               // Brief summary for prompts
 }
 
 pub struct FileStorage {
@@ -58,7 +60,10 @@ impl FileStorage {
         // 5. Extract text content based on file type
         let content = self.extract_text_content(&file_path, &file_type)?;
         
-        // 6. Create metadata record
+        // 6. Create metadata record (compute brief summary)
+        let summary = Self::summarize(&filename, &file_type, file_size, &content);
+        println!("[uploads] New file uploaded: name='{}' type='{}' size={} id={} summary='{}'", filename, file_type, file_size, file_id, summary);
+        
         let file_info = FileInfo {
             id: file_id,
             name: filename,
@@ -67,6 +72,7 @@ impl FileStorage {
             upload_date: Utc::now().to_rfc3339(),
             content,
             is_context_enabled: true, // Default to enabled
+            summary,
         };
         
         // 7. Save to JSON index
@@ -161,7 +167,21 @@ impl FileStorage {
         }
         
         let index_content = fs::read_to_string(&self.index_path)?;
-        let files: Vec<FileInfo> = serde_json::from_str(&index_content)?;
+        let mut files: Vec<FileInfo> = serde_json::from_str(&index_content)?;
+        
+        // Backfill summaries for older entries missing the new field
+        let mut changed = false;
+        for f in files.iter_mut() {
+            if f.summary.trim().is_empty() {
+                f.summary = Self::summarize(&f.name, &f.file_type, f.size, &f.content);
+                println!("[uploads] Backfilled summary for id={} name='{}' => '{}'", f.id, f.name, f.summary);
+                changed = true;
+            }
+        }
+        if changed {
+            self.save_index(&files)?;
+        }
+        
         Ok(files)
     }
     
@@ -208,5 +228,22 @@ impl FileStorage {
             .collect();
         
         Ok(context_content)
+    }
+}
+
+impl FileStorage {
+    fn summarize(name: &str, file_type: &str, size: u64, content: &str) -> String {
+        // Non-LLM, cheap summary: header + trimmed snippet
+        let mut snippet = content.trim();
+        if snippet.len() > 400 {
+            snippet = &snippet[..400];
+        }
+        let cleaned = snippet
+            .replace('\r', " ")
+            .replace('\n', " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("{} [{} | {} bytes] — {}", name, file_type, size, cleaned)
     }
 }

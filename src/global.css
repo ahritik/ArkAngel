@@ -162,3 +162,11 @@
 .chev {
   transition: transform 0.15s ease-in-out;
 }
+
+/* Local 2-line clamp utility for summaries */
+.aa-line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
