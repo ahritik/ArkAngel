@@ -1,10 +1,12 @@
-import { useEffect } from "react";
-import { Card, Settings, Completion, ChatHistory } from "./components";
+import { useEffect, useState } from "react";
+import { Card, Settings, Completion, ChatHistory, FullChatHistory, Integrations } from "./components";
 import { ChatConversation } from "./types";
 import { check } from "@tauri-apps/plugin-updater";
 import { startRealTimeExport } from "./lib/storage";
 
 const App = () => {
+  const [isFullChatViewOpen, setIsFullChatViewOpen] = useState(false);
+  const [isIntegrationsOpen, setIsIntegrationsOpen] = useState(false);
   const handleSelectConversation = (conversation: ChatConversation) => {
     // Use localStorage to communicate the selected conversation to Completion component
     localStorage.setItem("selectedConversation", JSON.stringify(conversation));
@@ -37,6 +39,22 @@ const App = () => {
     window.dispatchEvent(new CustomEvent("newConversation"));
   };
 
+  const handleViewAllChats = () => {
+    setIsFullChatViewOpen(true);
+  };
+
+  const handleCloseFullChatView = () => {
+    setIsFullChatViewOpen(false);
+  };
+
+  const handleOpenIntegrations = () => {
+    setIsIntegrationsOpen(true);
+  };
+
+  const handleCloseIntegrations = () => {
+    setIsIntegrationsOpen(false);
+  };
+
   return (
     <div className="w-screen h-screen flex overflow-hidden justify-center items-start">
       <Card className="w-full flex flex-row items-center gap-2 p-2">
@@ -45,9 +63,23 @@ const App = () => {
           onSelectConversation={handleSelectConversation}
           onNewConversation={handleNewConversation}
           currentConversationId={null}
+          onViewAllChats={handleViewAllChats}
         />
-        <Settings />
+        <Settings onOpenIntegrations={handleOpenIntegrations} />
       </Card>
+
+      <FullChatHistory
+        isOpen={isFullChatViewOpen}
+        onClose={handleCloseFullChatView}
+        onSelectConversation={handleSelectConversation}
+        onNewConversation={handleNewConversation}
+        currentConversationId={null}
+      />
+
+      <Integrations
+        isOpen={isIntegrationsOpen}
+        onClose={handleCloseIntegrations}
+      />
     </div>
   );
 };
