@@ -10,6 +10,7 @@ import {
   ScrollArea,
 } from "@/components";
 import { getAvailableIntegrations, Integration } from "./integrationDefinitions";
+import { useWindowResize, useWindowFocus } from "@/hooks";
 
 interface IntegrationsProps {
   isOpen: boolean;
@@ -21,6 +22,7 @@ export const Integrations: React.FC<IntegrationsProps> = ({
   onClose,
 }) => {
   const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const { resizeWindow } = useWindowResize();
 
   // Initialize integrations
   useEffect(() => {
@@ -28,6 +30,18 @@ export const Integrations: React.FC<IntegrationsProps> = ({
       initializeIntegrations();
     }
   }, [isOpen]);
+
+  // Match ChatHistory: resize window when popover open state changes
+  useEffect(() => {
+    resizeWindow(isOpen);
+  }, [isOpen, resizeWindow]);
+
+  // Close when window focus is lost (like ChatHistory)
+  useWindowFocus({
+    onFocusLost: () => {
+      onClose();
+    },
+  });
 
   const updateIntegration = (integrationId: string, updates: Partial<Integration>) => {
     setIntegrations(prev => prev.map(integration =>
@@ -88,7 +102,7 @@ export const Integrations: React.FC<IntegrationsProps> = ({
 
   return (
     <Popover open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      {/* Anchor in the top toolbar region for consistent placement */}
+      {/* Anchor near top-right like ChatHistory button */}
       <PopoverAnchor asChild>
         <div className="fixed top-2 right-2 w-0 h-0" />
       </PopoverAnchor>

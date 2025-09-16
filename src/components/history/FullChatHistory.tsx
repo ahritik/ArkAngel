@@ -14,6 +14,7 @@ import {
   ScrollArea,
   Input,
 } from "@/components";
+import { useWindowResize, useWindowFocus } from "@/hooks";
 import { loadChatHistory, deleteConversation } from "@/lib";
 import { ChatConversation } from "@/types";
 import { summarizeChat } from "../summarize/summarizer";
@@ -37,6 +38,7 @@ export const FullChatHistory: React.FC<FullChatHistoryProps> = ({
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [summaries, setSummaries] = useState<Map<string, any>>(new Map());
+  const { resizeWindow } = useWindowResize();
 
   // Load conversations when dialog opens
   useEffect(() => {
@@ -55,6 +57,18 @@ export const FullChatHistory: React.FC<FullChatHistoryProps> = ({
       setSummaries(newSummaries);
     }
   }, [isOpen]);
+
+  // Match ChatHistory: resize window when popover open state changes
+  useEffect(() => {
+    resizeWindow(isOpen);
+  }, [isOpen, resizeWindow]);
+
+  // Close when window focus is lost (like ChatHistory)
+  useWindowFocus({
+    onFocusLost: () => {
+      onClose();
+    },
+  });
 
   const handleDeleteConversation = (
     conversationId: string,
@@ -122,7 +136,7 @@ export const FullChatHistory: React.FC<FullChatHistoryProps> = ({
 
   return (
     <Popover open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      {/* Anchor in the top toolbar region for consistent placement */}
+      {/* Anchor near top-right like ChatHistory button */}
       <PopoverAnchor asChild>
         <div className="fixed top-2 right-2 w-0 h-0" />
       </PopoverAnchor>
