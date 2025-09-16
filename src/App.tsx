@@ -33,6 +33,7 @@ const App = () => {
     };
   }, []);
 
+
   const handleNewConversation = () => {
     // Clear any selected conversation and trigger new conversation
     localStorage.removeItem("selectedConversation");
@@ -66,20 +67,17 @@ const App = () => {
           onViewAllChats={handleViewAllChats}
         />
         <Settings onOpenIntegrations={handleOpenIntegrations} />
+        {/* Place popovers in the toolbar for exact anchoring like Settings/ChatHistory */}
+        <FullChatHistory
+          isOpen={isFullChatViewOpen}
+          onClose={handleCloseFullChatView}
+          onSelectConversation={handleSelectConversation}
+          onNewConversation={handleNewConversation}
+          currentConversationId={null}
+        />
+
+        <Integrations isOpen={isIntegrationsOpen} onClose={handleCloseIntegrations} />
       </Card>
-
-      <FullChatHistory
-        isOpen={isFullChatViewOpen}
-        onClose={handleCloseFullChatView}
-        onSelectConversation={handleSelectConversation}
-        onNewConversation={handleNewConversation}
-        currentConversationId={null}
-      />
-
-      <Integrations
-        isOpen={isIntegrationsOpen}
-        onClose={handleCloseIntegrations}
-      />
     </div>
   );
 };

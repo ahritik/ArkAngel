@@ -192,7 +192,10 @@ export const Settings: React.FC<SettingsProps> = ({ onOpenIntegrations }) => {
                 <div className="text-xs text-muted-foreground">Manage your third-party integrations</div>
               </div>
               <Button
-                onClick={onOpenIntegrations}
+                onClick={() => {
+                  setIsPopoverOpen(false);
+                  onOpenIntegrations?.();
+                }}
                 size="sm"
                 variant="secondary"
               >

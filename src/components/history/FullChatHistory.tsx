@@ -121,15 +121,10 @@ export const FullChatHistory: React.FC<FullChatHistoryProps> = ({
   });
 
   return (
-    <Popover
-      open={isOpen}
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      {/* Anchor the popover near the top-right, similar to Settings/ChatHistory buttons */}
+    <Popover open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      {/* Anchor in the top toolbar region for consistent placement */}
       <PopoverAnchor asChild>
-        <div className="fixed top-2 right-2 w-px h-px" />
+        <div className="fixed top-2 right-2 w-0 h-0" />
       </PopoverAnchor>
       <PopoverContent
         align="end"
@@ -137,39 +132,39 @@ export const FullChatHistory: React.FC<FullChatHistoryProps> = ({
         className="select-none w-screen p-0 border overflow-hidden border-input/50"
         sideOffset={8}
       >
-        <ScrollArea className="h-[calc(100vh-6.5rem)]">
-          <div className="border-b border-input/50 p-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">
-                All Conversations
-              </h2>
-              <div className="flex items-center gap-2">
-                <div className="relative">
-                  <Search className="h-4 w-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    placeholder="Search conversations..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9 w-64"
-                  />
-                </div>
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    onNewConversation();
-                    onClose();
-                  }}
-                  className="text-xs"
-                >
-                  New Chat
-                </Button>
+        <div className="border-b border-input/50 p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">
+              All Conversations
+            </h2>
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <Search className="h-4 w-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Search conversations..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 w-64"
+                />
               </div>
+              <Button
+                size="sm"
+                onClick={() => {
+                  onNewConversation();
+                  onClose();
+                }}
+                className="text-xs"
+              >
+                New Chat
+              </Button>
             </div>
-            <p className="text-sm text-muted-foreground">
-              Browse and search through all your conversations
-            </p>
           </div>
+          <p className="text-sm text-muted-foreground">
+            Browse and search through all your conversations
+          </p>
+        </div>
 
+        <ScrollArea className="h-[calc(100vh-8.75rem)]">
           <div className="p-6">
             {filteredConversations.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">

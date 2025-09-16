@@ -87,15 +87,10 @@ export const Integrations: React.FC<IntegrationsProps> = ({
   };
 
   return (
-    <Popover
-      open={isOpen}
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      {/* Anchor the popover near the top-right, consistent with other popups */}
+    <Popover open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      {/* Anchor in the top toolbar region for consistent placement */}
       <PopoverAnchor asChild>
-        <div className="fixed top-2 right-2 w-px h-px" />
+        <div className="fixed top-2 right-2 w-0 h-0" />
       </PopoverAnchor>
       <PopoverContent
         align="end"
@@ -103,17 +98,16 @@ export const Integrations: React.FC<IntegrationsProps> = ({
         className="select-none w-screen p-0 border overflow-hidden border-input/50"
         sideOffset={8}
       >
-        <ScrollArea className="h-[calc(100vh-6.5rem)]">
+        <div className="border-b border-input/50 p-4">
+          <h1 className="text-lg font-bold bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">
+            Integrations
+          </h1>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Connect and manage your third-party integrations
+          </p>
+        </div>
+        <ScrollArea className="h-[calc(100vh-8.75rem)]">
           <div className="p-6 space-y-4">
-            {/* Configuration Header */}
-            <div className="border-b border-input/50 pb-2">
-              <h1 className="text-lg font-bold bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">
-                Integrations
-              </h1>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Connect and manage your third-party integrations
-              </p>
-            </div>
 
             {integrations.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
