@@ -33,7 +33,7 @@ export const createGoogleSuiteIntegration = (): Integration => ({
   id: "google-suite",
   name: "Google Suite",
   description: "Authorize access to your Gmail and Calendar",
-  icon: React.createElement(SiGoogle, { className: "h-5 w-5 text-[#4285F4]" }),
+  icon: React.createElement(SiGoogle, { className: "h-5 w-5", style: { color: GOOGLE_BRAND_COLOR } }),
   isAvailable: true,
   isConnected: false,
   isConnecting: false,
