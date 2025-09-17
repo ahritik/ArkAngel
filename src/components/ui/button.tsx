@@ -91,11 +91,11 @@ function Button({
         buttonVariants({ variant, size, className }),
         activeSpotlight && "aa-spotlight relative overflow-hidden"
       )}
-      onMouseMove={(e: any) => {
+      onMouseMove={(e: React.MouseEvent<HTMLElement>) => {
         handleMouseMove(e);
         onMouseMove?.(e);
       }}
-      onMouseLeave={(e: any) => {
+      onMouseLeave={(e: React.MouseEvent<HTMLElement>) => {
         handleMouseLeave(e);
         onMouseLeave?.(e);
       }}
