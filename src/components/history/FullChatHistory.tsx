@@ -6,14 +6,7 @@ import {
   Loader2,
   Search,
 } from "lucide-react";
-import {
-  Popover,
-  PopoverContent,
-  PopoverAnchor,
-  Button,
-  ScrollArea,
-  Input,
-} from "@/components";
+import { Popover, PopoverContent, PopoverAnchor, Button, ScrollArea, Input, SpotlightArea } from "@/components";
 import { useWindowResize, useWindowFocus } from "@/hooks";
 import { loadChatHistory, deleteConversation } from "@/lib";
 import { ChatConversation } from "@/types";
@@ -134,6 +127,140 @@ export const FullChatHistory: React.FC<FullChatHistoryProps> = ({
     );
   });
 
+  // Date helpers for grouping
+  const isSameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+
+  const isYesterday = (d: Date) => {
+    const now = new Date();
+    const y = new Date(now);
+    y.setDate(now.getDate() - 1);
+    return isSameDay(d, y);
+  };
+
+  const formatFullDate = (d: Date) =>
+    d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
+
+  // Group conversations: Today (no header), Yesterday, and other dates
+  const now = new Date();
+  const todayItems: ChatConversation[] = [];
+  const yesterdayItems: ChatConversation[] = [];
+  const otherGroups = new Map<string, { label: string; items: ChatConversation[]; sortKey: number }>();
+
+  for (const c of filteredConversations) {
+    const d = new Date(c.updatedAt);
+    if (isSameDay(d, now)) {
+      todayItems.push(c);
+    } else if (isYesterday(d)) {
+      yesterdayItems.push(c);
+    } else {
+      const keyDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const label = formatFullDate(d);
+      const sortKey = keyDate.getTime();
+      const existing = otherGroups.get(label);
+      if (existing) {
+        existing.items.push(c);
+      } else {
+        otherGroups.set(label, { label, items: [c], sortKey });
+      }
+    }
+  }
+
+  const sortedOtherGroups = Array.from(otherGroups.values()).sort((a, b) => b.sortKey - a.sortKey);
+
+  // Ensure items within each group are sorted by recency (most recent first)
+  todayItems.sort((a, b) => b.updatedAt - a.updatedAt);
+  yesterdayItems.sort((a, b) => b.updatedAt - a.updatedAt);
+  sortedOtherGroups.forEach((g) => {
+    g.items.sort((a, b) => b.updatedAt - a.updatedAt);
+  });
+
+  // Render helper for a single conversation row (button)
+  const renderConversationRow = (conversation: ChatConversation) => {
+    const summary = summaries.get(conversation.id);
+    return (
+      <SpotlightArea as="button"
+        key={conversation.id}
+        className={`group w-full text-left p-4 rounded-lg border transition-all hover:bg-muted/50 ${
+          conversation.id === currentConversationId
+            ? "bg-muted border-primary/20"
+            : "border-transparent hover:border-input/50"
+        }`}
+        onClick={() => handleSelectConversation(conversation)}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <h3 className="text-base font-medium truncate leading-6">
+                {conversation.title}
+              </h3>
+              <div className="flex items-center gap-2">
+                {selectedConversationId === conversation.id && (
+                  <div className="flex items-center gap-1 text-blue-600">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <span className="text-xs">Loading...</span>
+                  </div>
+                )}
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="cursor-pointer h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                  onClick={(e) => handleDeleteConversation(conversation.id, e)}
+                  title="Delete conversation"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+
+            {summary && (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground italic">
+                  {summary.oneSentenceSummary}
+                </p>
+
+                {summary.chatOutline.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {summary.chatOutline.slice(0, 3).map((section: any, index: number) => (
+                      <span
+                        key={`section-${conversation.id}-${section.title}-${index}`}
+                        className="text-xs bg-primary/10 text-primary px-2 py-1 rounded"
+                      >
+                        {section.title}
+                      </span>
+                    ))}
+                    {summary.chatOutline.length > 3 && (
+                      <span className="text-xs text-muted-foreground">
+                        +{summary.chatOutline.length - 3} more sections
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
+              <div className="flex items-center gap-1">
+                <Calendar className="h-3 w-3" />
+                <span>{formatDate(conversation.updatedAt)}</span>
+              </div>
+              <span>•</span>
+              <span>{conversation.messages.length} messages</span>
+              {summary?.chatOutline && (
+                <>
+                  <span>•</span>
+                  <span>{summary.chatOutline.length} sections</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </SpotlightArea>
+    );
+  };
+
   return (
     <Popover open={isOpen} onOpenChange={(open) => !open && onClose()}>
       {/* Anchor near top-right like ChatHistory button */}
@@ -191,89 +318,33 @@ export const FullChatHistory: React.FC<FullChatHistoryProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="space-y-4">
-                {filteredConversations.map((conversation) => {
-                  const summary = summaries.get(conversation.id);
-                  return (
-                    <button
-                      key={conversation.id}
-                      className={`group w-full text-left p-4 rounded-lg border transition-all hover:bg-muted/50 ${
-                        conversation.id === currentConversationId
-                          ? "bg-muted border-primary/20"
-                          : "border-transparent hover:border-input/50"
-                      }`}
-                      onClick={() => handleSelectConversation(conversation)}
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between gap-2 mb-2">
-                            <h3 className="text-base font-medium truncate leading-6">
-                              {conversation.title}
-                            </h3>
-                            <div className="flex items-center gap-2">
-                              {selectedConversationId === conversation.id && (
-                                <div className="flex items-center gap-1 text-blue-600">
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                  <span className="text-xs">Loading...</span>
-                                </div>
-                              )}
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="cursor-pointer h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-                                onClick={(e) => handleDeleteConversation(conversation.id, e)}
-                                title="Delete conversation"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </div>
+              <div className="space-y-6">
+                {/* Today (no section header) */}
+                {todayItems.length > 0 && (
+                  <div className="space-y-4">
+                    {todayItems.map(renderConversationRow)}
+                  </div>
+                )}
 
-                          {summary && (
-                            <div className="space-y-3">
-                              <p className="text-sm text-muted-foreground italic">
-                                {summary.oneSentenceSummary}
-                              </p>
+                {/* Yesterday */}
+                {yesterdayItems.length > 0 && (
+                  <div className="space-y-3">
+                    <h3 className="text-sm font-semibold text-muted-foreground">Yesterday</h3>
+                    <div className="space-y-4">
+                      {yesterdayItems.map(renderConversationRow)}
+                    </div>
+                  </div>
+                )}
 
-                              {summary.chatOutline.length > 0 && (
-                                <div className="flex flex-wrap gap-2">
-                                  {summary.chatOutline.slice(0, 3).map((section: any, index: number) => (
-                                    <span
-                                      key={`section-${conversation.id}-${section.title}-${index}`}
-                                      className="text-xs bg-primary/10 text-primary px-2 py-1 rounded"
-                                    >
-                                      {section.title}
-                                    </span>
-                                  ))}
-                                  {summary.chatOutline.length > 3 && (
-                                    <span className="text-xs text-muted-foreground">
-                                      +{summary.chatOutline.length - 3} more sections
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
-                            <div className="flex items-center gap-1">
-                              <Calendar className="h-3 w-3" />
-                              <span>{formatDate(conversation.updatedAt)}</span>
-                            </div>
-                            <span>•</span>
-                            <span>{conversation.messages.length} messages</span>
-                            {summary?.chatOutline && (
-                              <>
-                                <span>•</span>
-                                <span>{summary.chatOutline.length} sections</span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
+                {/* Older dates */}
+                {sortedOtherGroups.map((group) => (
+                  <div key={group.label} className="space-y-3">
+                    <h3 className="text-sm font-semibold text-muted-foreground">{group.label}</h3>
+                    <div className="space-y-4">
+                      {group.items.map(renderConversationRow)}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

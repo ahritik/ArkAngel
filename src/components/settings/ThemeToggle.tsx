@@ -1,5 +1,5 @@
 import { Moon, Sun, Monitor } from "lucide-react";
-import { Button } from "@/components";
+import { Button, SpotlightArea } from "@/components";
 import { useTheme } from "@/theme-provider";
 
 export function ThemeToggle() {
@@ -42,7 +42,9 @@ export function ThemeToggle() {
   };
 
   return (
-    <div className="flex items-center justify-between gap-2 p-3 rounded-md border border-input/50 bg-background/50">
+    <SpotlightArea
+      className="flex items-center justify-between gap-2 p-3 rounded-md border border-input/50 bg-background/50"
+    >
       <div className="text-sm">
         <div className="font-medium">Theme</div>
         <div className="text-xs text-muted-foreground capitalize">{theme} mode</div>
@@ -57,6 +59,6 @@ export function ThemeToggle() {
         {getThemeIcon()}
         <span className="sr-only">Toggle theme</span>
       </Button>
-    </div>
+    </SpotlightArea>
   );
 }

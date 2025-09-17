@@ -6,13 +6,7 @@ import {
   Calendar,
   Loader2,
 } from "lucide-react";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  Button,
-  ScrollArea,
-} from "@/components";
+import { Popover, PopoverContent, PopoverTrigger, Button, ScrollArea, SpotlightArea } from "@/components";
 import { loadChatHistory, deleteConversation } from "@/lib";
 import { ChatConversation } from "@/types";
 import { useWindowResize, useWindowFocus } from "@/hooks";
@@ -178,13 +172,11 @@ export const ChatHistory = ({
             ) : (
               <div className="space-y-1 pr-2">
                 {conversations.map((conversation) => (
-                  <button
+                  <SpotlightArea className="group flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all hover:bg-muted/50 w-full text-left"
+                    as="button"
                     key={conversation.id}
-                    className={`group flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all hover:bg-muted/50 w-full text-left ${
-                      conversation.id === currentConversationId
-                        ? "bg-muted border-primary/20"
-                        : "border-transparent hover:border-input/50"
-                    }`}
+                    data-active={conversation.id === currentConversationId}
+                    data-style
                     onClick={() => handleSelectConversation(conversation)}
                   >
                     <MessageSquare className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
@@ -225,7 +217,7 @@ export const ChatHistory = ({
                         </span>
                       </div>
                     </div>
-                  </button>
+                  </SpotlightArea>
                 ))}
               </div>
             )}

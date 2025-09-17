@@ -1,14 +1,6 @@
 import React, { useState, useEffect } from "react";
-import {
-  Settings,
-} from "lucide-react";
-import {
-  Popover,
-  PopoverContent,
-  PopoverAnchor,
-  Button,
-  ScrollArea,
-} from "@/components";
+import { Settings } from "lucide-react";
+import { Popover, PopoverContent, PopoverAnchor, Button, ScrollArea, SpotlightArea } from "@/components";
 import { getAvailableIntegrations, Integration } from "./integrationDefinitions";
 import { useWindowResize, useWindowFocus } from "@/hooks";
 
@@ -59,6 +51,10 @@ export const Integrations: React.FC<IntegrationsProps> = ({
   const handleConnect = async (integrationId: string) => {
     const integration = integrations.find(i => i.id === integrationId);
     if (integration) {
+      if (!integration.isAvailable) {
+        updateIntegration(integrationId, { connectMessage: integration.connectMessage || "Coming soon" });
+        return;
+      }
       updateIntegration(integrationId, { isConnecting: true, connectMessage: null });
 
       try {
@@ -134,37 +130,108 @@ export const Integrations: React.FC<IntegrationsProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="space-y-4">
-                {integrations.map((integration) => (
-                  <div
-                    key={integration.id}
-                    className="flex items-center justify-between gap-2 p-3 rounded-md border border-input/50 bg-background/50"
-                  >
-                    <div className="text-sm">
-                      <div className="font-medium">{integration.name}</div>
-                      <div className="text-xs text-muted-foreground">{integration.description}</div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {integration.connectMessage && (
-                        <span className="text-xs text-muted-foreground max-w-[240px] truncate" title={integration.connectMessage}>{integration.connectMessage}</span>
-                      )}
-                      {integration.isConnected ? (
-                        <Button onClick={() => handleDisconnect(integration.id)} disabled={integration.isConnecting} size="sm" variant="secondary">
-                          {integration.isConnecting ? "Disconnecting..." : "Disconnect"}
-                        </Button>
-                      ) : (
-                        <Button onClick={() => handleConnect(integration.id)} disabled={integration.isConnecting} size="sm">
-                          {integration.isConnecting ? "Connecting..." : "Connect"}
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                ))}
+              <div className="space-y-8">
+                {/* Communication */}
+                <Section
+                  title="Communication"
+                  subtitle="Email and messaging tools to stay in sync"
+                  items={integrations.filter((i) => ["slack", "outlook", "gmail"].includes(i.id))}
+                  onConnect={handleConnect}
+                  onDisconnect={handleDisconnect}
+                />
+                {/* Productivity */}
+                <Section
+                  title="Productivity"
+                  subtitle="Docs, calendars, notes and more"
+                  items={integrations.filter((i) => [
+                    "google-suite",
+                    "google-calendar",
+                    "google-docs",
+                    "google-slides",
+                    "google-sheets",
+                    "notion",
+                  ].includes(i.id))}
+                  onConnect={handleConnect}
+                  onDisconnect={handleDisconnect}
+                />
+                {/* Dev */}
+                <Section
+                  title="Dev"
+                  subtitle="Developer tools and issue tracking"
+                  items={integrations.filter((i) => ["github", "linear"].includes(i.id))}
+                  onConnect={handleConnect}
+                  onDisconnect={handleDisconnect}
+                />
+                {/* Other */}
+                <Section
+                  title="Other"
+                  subtitle="Additional integrations to extend your workflow"
+                  items={integrations.filter((i) => ["loops"].includes(i.id))}
+                  onConnect={handleConnect}
+                  onDisconnect={handleDisconnect}
+                />
               </div>
             )}
           </div>
         </ScrollArea>
       </PopoverContent>
     </Popover>
+  );
+};
+
+// Section component for grouped rendering
+const Section: React.FC<{
+  title: string;
+  subtitle?: string;
+  items: Integration[];
+  onConnect: (integrationId: string) => void | Promise<void>;
+  onDisconnect: (integrationId: string) => void | Promise<void>;
+}> = ({ title, subtitle, items, onConnect, onDisconnect }) => {
+  if (!items || items.length === 0) return null;
+  return (
+    <div>
+      <div className="mb-3">
+        <h2 className="text-sm font-semibold">{title}</h2>
+        {subtitle && (
+          <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>
+        )}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {items.map((integration) => (
+          <SpotlightArea
+            as="div"
+            key={integration.id}
+            className="flex items-start justify-between gap-3 p-3 rounded-md border border-input/50 bg-background/50"
+          >
+            <div className="text-sm flex items-start gap-3">
+              <div className="mt-0.5 text-muted-foreground">{integration.icon}</div>
+              <div>
+                <div className="font-medium flex items-center gap-2">
+                  {integration.name}
+                  {!integration.isAvailable && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Coming soon</span>
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground">{integration.description}</div>
+                {integration.connectMessage && (
+                  <div className="text-xs text-muted-foreground mt-1" title={integration.connectMessage}>{integration.connectMessage}</div>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {integration.isConnected ? (
+                <Button onClick={() => onDisconnect(integration.id)} disabled={integration.isConnecting} size="sm" variant="secondary">
+                  {integration.isConnecting ? "Disconnecting..." : "Disconnect"}
+                </Button>
+              ) : (
+                <Button onClick={() => onConnect(integration.id)} disabled={integration.isConnecting || !integration.isAvailable} size="sm">
+                  {integration.isConnecting ? "Connecting..." : "Connect"}
+                </Button>
+              )}
+            </div>
+          </SpotlightArea>
+        ))}
+      </div>
+    </div>
   );
 };

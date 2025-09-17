@@ -1,20 +1,14 @@
 import { useState, useEffect } from "react";
 import { useWindowResize } from "@/hooks";
 import { SettingsIcon } from "lucide-react";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  Button,
-  ScrollArea,
-} from "@/components";
+import { Popover, PopoverContent, PopoverTrigger, Button, ScrollArea, SpotlightArea } from "@/components";
 import { ProviderSelection } from "./ProviderSelection";
 import { ApiKeyInput } from "./ApiKeyInput";
 import { ModelSelection } from "./ModelSelection";
 import { Disclaimer } from "./Disclaimer";
 import { SystemPrompt } from "./SystemPrompt";
 import { Speech } from "./Speech";
-import { FileUploadSettings } from "./FileUploadSettings";
+import { ManageDataDialog } from "./ManageDataDialog";
 import { ThemeToggle } from "./ThemeToggle";
 import {
   loadSettingsFromStorage,
@@ -159,6 +153,7 @@ export const Settings: React.FC<SettingsProps> = ({ onOpenIntegrations }) => {
           size="icon"
           aria-label="Open Settings"
           className="cursor-pointer [data-state=open]:bg-[red]"
+          spotlight
           title="Open Settings"
         >
           <SettingsIcon className="h-4 w-4" />
@@ -186,7 +181,7 @@ export const Settings: React.FC<SettingsProps> = ({ onOpenIntegrations }) => {
             </div>
 
             {/* Integrations */}
-            <div className="flex items-center justify-between gap-2 p-3 rounded-md border border-input/50 bg-background/50">
+            <SpotlightArea className="flex items-center justify-between gap-2 p-3 rounded-md border border-input/50 bg-background/50">
               <div className="text-sm">
                 <div className="font-medium">Integrations</div>
                 <div className="text-xs text-muted-foreground">Manage your third-party integrations</div>
@@ -201,7 +196,7 @@ export const Settings: React.FC<SettingsProps> = ({ onOpenIntegrations }) => {
               >
                 Open Integrations
               </Button>
-            </div>
+            </SpotlightArea>
 
             {/* Theme Toggle */}
             <ThemeToggle />
@@ -277,8 +272,14 @@ export const Settings: React.FC<SettingsProps> = ({ onOpenIntegrations }) => {
               onChange={(value) => updateSettings({ systemPrompt: value })}
             />
 
-            {/* File Upload Settings */}
-            <FileUploadSettings />
+            {/* Manage Data (pop-out dialog) */}
+            <SpotlightArea className="flex items-center justify-between gap-2 p-3 rounded-md border border-input/50 bg-background/50">
+              <div className="text-sm">
+                <div className="font-medium">Manage Data</div>
+                <div className="text-xs text-muted-foreground">View and delete uploaded files and chat history</div>
+              </div>
+              <ManageDataDialog />
+            </SpotlightArea>
           </div>
 
           <div className="pb-4 flex items-center justify-center">
