@@ -176,7 +176,6 @@ export const ChatHistory = ({
                     as="button"
                     key={conversation.id}
                     data-active={conversation.id === currentConversationId}
-                    data-style
                     onClick={() => handleSelectConversation(conversation)}
                   >
                     <MessageSquare className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
