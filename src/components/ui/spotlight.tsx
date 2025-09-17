@@ -35,8 +35,8 @@ export function SpotlightArea<T extends ElementTag = "div">(
   return (
     <Tag
       className={cn("aa-spotlight relative overflow-hidden", className)}
-  onMouseMove={(e: any) => { handleMouseMove(e); onMouseMove?.(e); }}
-  onMouseLeave={(e: any) => { handleMouseLeave(e); onMouseLeave?.(e); }}
+  onMouseMove={(e: React.MouseEvent<HTMLElement>) => { handleMouseMove(e); onMouseMove?.(e); }}
+  onMouseLeave={(e: React.MouseEvent<HTMLElement>) => { handleMouseLeave(e); onMouseLeave?.(e); }}
       {...rest}
     >
       {children}
